@@ -1,0 +1,10 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: distort-portrait:latest
+    ports:
+      # Host port is configurable: PORT=5180 docker compose up --build
+      - "127.0.0.1:${PORT:-8080}:80"
+    restart: unless-stopped
