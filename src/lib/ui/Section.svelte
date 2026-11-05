@@ -22,13 +22,13 @@
 
 <style>
 	.section {
-		border-top: 1px solid var(--line);
+		border-top: 1px solid var(--line-strong);
 	}
 	summary {
 		display: flex;
 		align-items: center;
 		gap: 10px;
-		padding: 15px 0 13px;
+		padding: 11px 0 10px;
 		list-style: none;
 		cursor: pointer;
 		user-select: none;
@@ -36,40 +36,45 @@
 	summary::-webkit-details-marker {
 		display: none;
 	}
+	summary:hover .title {
+		opacity: 0.55;
+	}
 	.title {
-		font-family: var(--mono);
-		font-size: 10px;
-		letter-spacing: 0.14em;
+		font-family: var(--sans);
+		font-size: 11px;
+		font-weight: 500;
+		letter-spacing: 0.015em;
 		text-transform: uppercase;
-		color: var(--paper);
+		color: var(--ink);
+		transition: opacity 120ms ease;
 	}
 	.kicker {
 		margin-left: auto;
 		font-family: var(--mono);
-		font-size: 9px;
-		letter-spacing: 0.06em;
+		font-size: 8px;
+		letter-spacing: 0.03em;
 		color: var(--muted);
 	}
 	.mark {
 		position: relative;
-		width: 9px;
-		height: 9px;
+		width: 8px;
+		height: 8px;
 		margin-left: auto;
 		flex: 0 0 auto;
 	}
 	.kicker + .mark {
-		margin-left: 2px;
+		margin-left: 4px;
 	}
 	.mark::before,
 	.mark::after {
 		content: '';
 		position: absolute;
-		top: 4px;
+		top: 3px;
 		left: 0;
-		width: 9px;
+		width: 8px;
 		height: 1px;
-		background: var(--muted);
-		transition: transform 160ms ease;
+		background: var(--ink);
+		transition: transform 140ms ease;
 	}
 	.mark::after {
 		transform: rotate(90deg);

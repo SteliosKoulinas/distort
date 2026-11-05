@@ -58,6 +58,11 @@ Requirements: a browser with WebGL2 and render-to-float support (`EXT_color_buff
 - Choose a **Grade** — Auto, Source, Bone, Ember, Ice or Rose — and set amount/chroma. Grading is a live shader uniform; it never resamples.
 - Open **Modulation** to run four LFOs. Each route has a target, shape, rate, depth, on/off and a retrigger button (`↻`).
 - **Randomize look** samples a new world; the dice button only changes the seed.
+- Switch the **Look** between Light and Dark in the masthead. It inverts only the paper and ink around the stage; the stage itself stays black, and the choice is remembered in `localStorage`.
+
+### Look
+
+The interface is set like a printed index: warm paper, black ink, hairline rules, numbered sections and monospace microtype. **Light** and **Dark** swap the paper/ink tokens and `color-scheme`; the stage and the grade stay black in both, because the artwork lives on black. The choice is written to `localStorage` and applied before first paint, so a reload never flashes the wrong look.
 - Every slider is live. The two expensive controls — **Count** and **Edge detail** — resample only on release.
 
 Measured on an Apple M2 (ANGLE/Metal, Chromium): **262,144 particles at 100 FPS**, 512² simulation texture, float32, no console errors. That is a local result, not a promise about integrated GPUs; the Count slider and the lower-density presets are the fallback.

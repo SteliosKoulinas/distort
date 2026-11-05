@@ -1,20 +1,33 @@
 :root {
-	color-scheme: dark;
-	--bg: #070706;
-	--panel: #0c0b09;
-	--panel-raised: #13110e;
-	--paper: #e7e2d8;
-	--paper-dim: #b8b1a5;
-	--muted: #7f796e;
-	--line: #25221d;
-	--line-bright: #3a352d;
-	--accent: #d9a24b;
-	--accent-soft: rgba(217, 162, 75, 0.16);
-	--danger: #d06a55;
-	--serif: 'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, serif;
-	--sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+	color-scheme: light;
+	--paper: #f2f0ea;
+	--paper-raised: #e8e5dc;
+	--ink: #10100e;
+	--ink-soft: #2d2d28;
+	--muted: #76746b;
+	--line: rgba(16, 16, 14, 0.16);
+	--line-strong: rgba(16, 16, 14, 0.55);
+	--stage: #050505;
+	--stage-ink: #f2f0ea;
+	--stage-muted: rgba(242, 240, 234, 0.55);
+	--danger: #9d3526;
+	--sans: 'Helvetica Neue', Helvetica, Arial, sans-serif;
 	--mono: 'SF Mono', SFMono-Regular, ui-monospace, Menlo, Consolas, monospace;
 }
+
+/* The stage stays black in both looks; only the paper around it inverts. */
+:root[data-look='dark'] {
+	color-scheme: dark;
+	--paper: #0e0e0c;
+	--paper-raised: #171715;
+	--ink: #f0eee6;
+	--ink-soft: #cdc9be;
+	--muted: #8a877d;
+	--line: rgba(240, 238, 230, 0.16);
+	--line-strong: rgba(240, 238, 230, 0.55);
+	--danger: #e08774;
+}
+
 
 * {
 	box-sizing: border-box;
@@ -24,8 +37,8 @@ html,
 body {
 	margin: 0;
 	height: 100%;
-	background: var(--bg);
-	color: var(--paper);
+	background: var(--paper);
+	color: var(--ink);
 }
 
 body {
@@ -52,11 +65,17 @@ a {
 }
 
 ::selection {
-	background: var(--accent);
-	color: #111;
+	background: var(--ink);
+	color: var(--paper);
 }
 
 :focus-visible {
-	outline: 1px solid var(--accent);
-	outline-offset: 3px;
+	outline: 1px solid var(--ink);
+	outline-offset: 2px;
+}
+
+@media (max-width: 900px) {
+	body {
+		overflow: auto;
+	}
 }

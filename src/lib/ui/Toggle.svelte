@@ -16,7 +16,7 @@
 	</span>
 	<span class="control">
 		<input type="checkbox" bind:checked onchange={onchange} aria-label={label} />
-		<span class="track" aria-hidden="true"><span class="thumb"></span></span>
+		<span class="track" aria-hidden="true"></span>
 	</span>
 </label>
 
@@ -26,7 +26,7 @@
 		align-items: flex-start;
 		justify-content: space-between;
 		gap: 14px;
-		margin: 0 0 13px;
+		margin: 0 0 11px;
 		cursor: pointer;
 	}
 	.copy {
@@ -35,22 +35,25 @@
 		gap: 3px;
 	}
 	.name {
-		font-family: var(--mono);
+		font-family: var(--sans);
 		font-size: 10px;
-		letter-spacing: 0.08em;
+		line-height: 1.2;
+		letter-spacing: 0.015em;
 		text-transform: uppercase;
-		color: var(--paper-dim);
+		color: var(--ink-soft);
 	}
 	.hint {
-		font-size: 10px;
-		line-height: 1.4;
+		font-family: var(--mono);
+		font-size: 8px;
+		line-height: 1.5;
+		text-transform: uppercase;
 		color: var(--muted);
 	}
 	.control {
 		position: relative;
 		flex: 0 0 auto;
-		width: 30px;
-		height: 16px;
+		width: 11px;
+		height: 11px;
 		margin-top: 1px;
 	}
 	input {
@@ -66,35 +69,29 @@
 	.track {
 		position: absolute;
 		inset: 0;
-		border: 1px solid var(--line-bright);
-		border-radius: 20px;
+		border: 1px solid var(--line-strong);
 		background: transparent;
 		transition:
-			background 140ms ease,
-			border-color 140ms ease;
+			background 120ms ease,
+			border-color 120ms ease;
 	}
-	.thumb {
+	.track::after {
+		content: '';
 		position: absolute;
-		top: 3px;
-		left: 3px;
-		width: 8px;
-		height: 8px;
-		border-radius: 50%;
-		background: var(--muted);
-		transition:
-			transform 140ms ease,
-			background 140ms ease;
+		inset: 2px;
+		background: var(--paper);
+		opacity: 0;
+		transition: opacity 120ms ease;
 	}
 	input:checked + .track {
-		border-color: var(--accent);
-		background: var(--accent-soft);
+		border-color: var(--ink);
+		background: var(--ink);
 	}
-	input:checked + .track .thumb {
-		transform: translateX(14px);
-		background: var(--accent);
+	input:checked + .track::after {
+		opacity: 1;
 	}
 	input:focus-visible + .track {
-		outline: 1px solid var(--accent);
-		outline-offset: 3px;
+		outline: 1px solid var(--ink);
+		outline-offset: 2px;
 	}
 </style>

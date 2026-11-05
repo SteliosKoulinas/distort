@@ -36,6 +36,25 @@
 	let errorMessage = $state('');
 	let dragActive = $state(false);
 	let activePreset = $state<PresetId | 'custom'>('drift');
+	let clock = $state('--:--');
+	let look = $state<'light' | 'dark'>('light');
+
+	function setLook(next: 'light' | 'dark') {
+		look = next;
+		if (next === 'dark') {
+			document.documentElement.dataset.look = 'dark';
+		} else {
+			delete document.documentElement.dataset.look;
+		}
+		document
+			.querySelector('meta[name="theme-color"]')
+			?.setAttribute('content', next === 'dark' ? '#0e0e0c' : '#f2f0ea');
+		try {
+			localStorage.setItem('distort-look', next);
+		} catch {
+			/* private mode */
+		}
+	}
 
 	let presetNote = $derived(
 		activePreset === 'custom'
@@ -60,6 +79,21 @@
 	);
 
 	onMount(() => {
+		look = document.documentElement.dataset.look === 'dark' ? 'dark' : 'light';
+		document
+			.querySelector('meta[name="theme-color"]')
+			?.setAttribute('content', look === 'dark' ? '#0e0e0c' : '#f2f0ea');
+
+		const tickClock = () => {
+			clock = new Intl.DateTimeFormat('en-GB', {
+				hour: '2-digit',
+				minute: '2-digit',
+				hour12: false
+			}).format(new Date());
+		};
+		tickClock();
+		const clockTimer = window.setInterval(tickClock, 30_000);
+
 		let instance: ParticleField;
 		try {
 			instance = new ParticleField({
@@ -75,7 +109,7 @@
 			});
 		} catch (error) {
 			errorMessage = error instanceof Error ? error.message : 'WebGL is not available in this browser.';
-			return;
+			return () => window.clearInterval(clockTimer);
 		}
 
 		field = instance;
@@ -106,6 +140,7 @@
 
 		// Browser-only cleanup, returned from onMount. No onDestroy.
 		return () => {
+			window.clearInterval(clockTimer);
 			window.removeEventListener('keydown', onKeyDown);
 			instance.dispose();
 			field = null;
@@ -241,502 +276,563 @@
 	aria-label="Choose an image"
 />
 
-<div class="app">
-	<aside class="panel">
-		<header class="masthead">
-			<div class="wordmark">distort</div>
-			<p class="tagline">a portrait in dust</p>
-		</header>
+<div class="frame">
+	<header class="masthead">
+		<div class="brand">
+			<a class="brand-name" href="/">Distort</a>
+			<span class="brand-sub">A portrait in dust</span>
+		</div>
+		<div class="mast-meta" aria-hidden="true">
+			<span>Image → particle field</span>
+			<span>Phase 01 / 02</span>
+		</div>
+		<div class="mast-stats">
+			<span>{stats ? `${stats.fps.toFixed(0)} fps` : '— fps'}</span>
+			<span>{stats ? `${fmtCount(stats.count)} dots` : '— dots'}</span>
+			<span>{clock} local</span>
+			<div class="look" role="group" aria-label="Look">
+				<button
+					type="button"
+					class:active={look === 'light'}
+					aria-pressed={look === 'light'}
+					onclick={() => setLook('light')}
+				>
+					Light
+				</button>
+				<button
+					type="button"
+					class:active={look === 'dark'}
+					aria-pressed={look === 'dark'}
+					onclick={() => setLook('dark')}
+				>
+					Dark
+				</button>
+			</div>
+		</div>
+	</header>
 
-		<Section title="Source" kicker="01" open={true}>
-			<button class="upload" onclick={() => fileEl.click()} type="button">
-				<span>{analysis ? 'Replace image' : 'Choose an image'}</span>
-				<span class="upload-plus" aria-hidden="true">+</span>
-			</button>
-
-			{#if analysis}
-				<div class="preview">
-					{#if thumbUrl}
-						<img src={thumbUrl} alt="Uploaded source" />
-					{/if}
-					<div class="preview-meta">
-						<span class="filename" title={fileName}>{fileName}</span>
-						<span class="dims">{analysis.width} × {analysis.height}</span>
-					</div>
-				</div>
-
-				{#if analysis.palette.length > 0}
-					<div class="palette" aria-label="Dominant hue clusters">
-						{#each analysis.palette as swatch}
-							<span
-								class="swatch"
-								style:background={swatch.hex}
-								style:flex-grow={Math.max(0.15, swatch.share)}
-								title={`${swatch.hex} · ${(swatch.share * 100).toFixed(0)}%`}
-							></span>
-						{/each}
-					</div>
-					<div class="palette-caption">dominant hue clusters</div>
-				{/if}
-
-				<Slider
-					label="Edge detail"
-					bind:value={params.edgeBoost}
-					min={0}
-					max={4}
-					step={0.1}
-					format={fmt1}
-					hint="Weights sampling toward edges. Resamples on release."
-					onchange={resampleNow}
-				/>
-
-				<div class="grade-block">
-					<div class="block-label">Grade</div>
-					<div class="chips" role="group" aria-label="Palette">
-						{#each PALETTE_MODES as option}
-							<button
-								type="button"
-								class:active={params.palette.mode === option.id}
-								onclick={() => choosePalette(option.id)}
-							>
-								{option.label}
-							</button>
-						{/each}
-					</div>
-
-					{#if palettePair}
-						<div
-							class="grade-preview"
-							style:background={paletteCss(palettePair)}
-							aria-hidden="true"
-						></div>
-					{/if}
-
-					{#if params.palette.mode === 'source'}
-						<p class="grade-hint">
-							Raw source colour. The additive stage tends to clip multicolour images.
-						</p>
-					{:else}
-						<Slider
-							label="Grade amount"
-							bind:value={params.palette.amount}
-							min={0}
-							max={1}
-							step={0.01}
-							format={fmt2}
-							hint="0 keeps the source, 1 is the full two-stop grade."
-						/>
-						<Slider
-							label="Grade chroma"
-							bind:value={params.palette.chroma}
-							min={0}
-							max={1}
-							step={0.01}
-							format={fmt2}
-						/>
-						<p class="grade-hint">
-							Auto follows the strongest source hue and falls back to bone for black-and-white.
-						</p>
-					{/if}
-				</div>
-			{:else}
-				<p class="empty-copy">
-					Drop a photograph into the stage. It is analysed once, then broken into fine points.
+	<div class="app">
+		<aside class="panel" aria-label="Controls">
+			<div class="panel-head">
+				<div class="panel-eyebrow"><span>( 01 — Instrument )</span><span>WebGL / 2D</span></div>
+				<h1 class="panel-title">An image,<br />in dust.</h1>
+				<p class="panel-lede">
+					A photograph is sampled into <strong>{fmtCount(params.particleCount)}</strong> points and held
+					in a slow field. Move the pointer to pull it apart; let go to bring it home.
 				</p>
-			{/if}
-		</Section>
-
-		<Section title="Presets" kicker="02" open={true}>
-			<div class="presets">
-				{#each PRESETS as preset}
-					<button
-						type="button"
-						class:active={activePreset === preset.id}
-						onclick={() => choosePreset(preset.id)}
-					>
-						{preset.name}
-					</button>
-				{/each}
-			</div>
-			<p class="preset-note">{presetNote}</p>
-
-			<div class="transport">
-				<button type="button" onclick={() => field?.reassemble()} disabled={!analysis}>
-					Reassemble <kbd>R</kbd>
-				</button>
-				<button type="button" onclick={() => field?.kick(1)} disabled={!analysis}>
-					Pulse <kbd>space</kbd>
-				</button>
+				<div class="panel-spec">
+					<span><b>{stats ? fmtCount(stats.count) : fmtCount(params.particleCount)}</b> points</span>
+					<span><b>{stats?.textureSize ?? '—'}</b>² grid</span>
+					<span><b>{stats?.precision ?? 'GPU'}</b> buffer</span>
+				</div>
 			</div>
 
-			<div class="seed-row">
-				<label class="seed">
-					<span>Seed</span>
-					<input
-						type="number"
-						min="0"
-						max="999999"
-						bind:value={params.seed}
+			<Section title="Source" kicker="01" open={true}>
+				<button class="upload" onclick={() => fileEl.click()} type="button">
+					<span>{analysis ? 'Replace image' : 'Choose an image'}</span>
+					<span class="upload-plus" aria-hidden="true">{analysis ? '↺' : '+'}</span>
+				</button>
+
+				{#if analysis}
+					<div class="preview">
+						{#if thumbUrl}
+							<img src={thumbUrl} alt="Uploaded source" />
+						{/if}
+						<div class="preview-meta">
+							<span class="filename" title={fileName}>{fileName}</span>
+							<span class="dims">{analysis.width} × {analysis.height}</span>
+						</div>
+					</div>
+
+					{#if analysis.palette.length > 0}
+						<div class="palette" aria-label="Dominant hue clusters">
+							{#each analysis.palette as swatch}
+								<span
+									class="swatch"
+									style:background={swatch.hex}
+									style:flex-grow={Math.max(0.15, swatch.share)}
+									title={`${swatch.hex} · ${(swatch.share * 100).toFixed(0)}%`}
+								></span>
+							{/each}
+						</div>
+						<div class="palette-caption">Dominant hue clusters</div>
+					{/if}
+
+					<Slider
+						label="Edge detail"
+						bind:value={params.edgeBoost}
+						min={0}
+						max={4}
+						step={0.1}
+						format={fmt1}
+						hint="Weights sampling toward edges. Resamples on release."
 						onchange={resampleNow}
 					/>
-				</label>
-				<button class="dice" type="button" onclick={randomizeSeed} title="New seed" aria-label="New seed">
-					↻
-				</button>
-			</div>
 
-			<button class="ghost" type="button" onclick={randomize}>Randomize look</button>
-		</Section>
+					<div class="grade-block">
+						<div class="block-label"><span>Grade</span><span>{params.palette.mode}</span></div>
+						<div class="chips" role="group" aria-label="Palette">
+							{#each PALETTE_MODES as option}
+								<button
+									type="button"
+									class:active={params.palette.mode === option.id}
+									aria-pressed={params.palette.mode === option.id}
+									onclick={() => choosePalette(option.id)}
+								>
+									{option.label}
+								</button>
+							{/each}
+						</div>
 
-		<Section title="Particles" kicker="03" open={true}>
-			<Slider
-				label="Count"
-				bind:value={params.particleCount}
-				min={32768}
-				max={262144}
-				step={64}
-				format={fmtCount}
-				hint="Up to 512 × 512 on the GPU. Resamples on release."
-				onchange={resampleNow}
-			/>
-			<Slider
-				label="Size"
-				bind:value={params.pointSize}
-				min={0.6}
-				max={4}
-				step={0.05}
-				format={fmt2}
-			/>
-			<Slider
-				label="Opacity"
-				bind:value={params.opacity}
-				min={0.2}
-				max={1}
-				step={0.01}
-				format={fmt2}
-			/>
-		</Section>
+						{#if palettePair}
+							<div
+								class="grade-preview"
+								style:background={paletteCss(palettePair)}
+								aria-hidden="true"
+							></div>
+						{/if}
 
-		<Section title="Flow field" kicker="04" open={true}>
-			<Toggle label="Curl noise" bind:checked={params.curlEnabled} />
-			<Slider
-				label="Strength"
-				bind:value={params.curlStrength}
-				min={0}
-				max={2.5}
-				step={0.05}
-				format={fmt2}
-			/>
-			<Slider
-				label="Scale"
-				bind:value={params.curlScale}
-				min={0.4}
-				max={4}
-				step={0.05}
-				format={fmt2}
-			/>
-			<Slider
-				label="Evolution speed"
-				bind:value={params.curlSpeed}
-				min={0}
-				max={0.6}
-				step={0.01}
-				format={fmt2}
-			/>
-		</Section>
-
-		<Section title="Return" kicker="05">
-			<Toggle label="Spring to origin" bind:checked={params.springEnabled} />
-			<Slider
-				label="Stiffness"
-				bind:value={params.spring}
-				min={0}
-				max={6}
-				step={0.05}
-				format={fmt2}
-			/>
-			<Slider
-				label="Damping"
-				bind:value={params.damping}
-				min={0.8}
-				max={0.99}
-				step={0.005}
-				format={fmt3}
-			/>
-			<Slider
-				label="Speed limit"
-				bind:value={params.maxSpeed}
-				min={0.5}
-				max={8}
-				step={0.1}
-				format={fmt1}
-			/>
-		</Section>
-
-		<Section title="Pointer" kicker="06">
-			<Toggle label="Pointer force" bind:checked={params.pointerEnabled} />
-			<Slider
-				label="Attract / repel"
-				bind:value={params.pointerStrength}
-				min={-4}
-				max={4}
-				step={0.1}
-				format={fmtSigned}
-				hint="Positive pulls toward the cursor, negative pushes away."
-			/>
-			<Slider
-				label="Radius"
-				bind:value={params.pointerRadius}
-				min={0.05}
-				max={1}
-				step={0.01}
-				format={fmt2}
-			/>
-			<Slider
-				label="Swirl"
-				bind:value={params.pointerSwirl}
-				min={0}
-				max={1.5}
-				step={0.05}
-				format={fmt2}
-			/>
-		</Section>
-
-		<Section title="Pulse" kicker="07">
-			<Toggle label="Radial pulse" bind:checked={params.pulseEnabled} />
-			<Toggle
-				label="Auto pulse"
-				bind:checked={params.autoPulse}
-				hint="A metronome in place of live audio. Phase 2 replaces it."
-			/>
-			<Slider
-				label="Strength"
-				bind:value={params.pulseStrength}
-				min={0}
-				max={8}
-				step={0.1}
-				format={fmt1}
-			/>
-			<Slider
-				label="Radius"
-				bind:value={params.pulseRadius}
-				min={0.1}
-				max={1}
-				step={0.01}
-				format={fmt2}
-			/>
-		</Section>
-
-		<Section title="Wave" kicker="08">
-			<Toggle label="Traveling ring" bind:checked={params.waveEnabled} />
-			<Slider
-				label="Strength"
-				bind:value={params.waveStrength}
-				min={0}
-				max={2}
-				step={0.05}
-				format={fmt2}
-			/>
-			<Slider
-				label="Wavenumber"
-				bind:value={params.waveFrequency}
-				min={1}
-				max={20}
-				step={0.5}
-				format={fmt1}
-			/>
-			<Slider
-				label="Phase speed"
-				bind:value={params.waveSpeed}
-				min={0}
-				max={6}
-				step={0.1}
-				format={fmt1}
-			/>
-		</Section>
-
-		<Section title="Fracture" kicker="09">
-			<Toggle
-				label="Voronoi shards"
-				bind:checked={params.fractureEnabled}
-				hint="Particles cluster into jittered cells that drift apart."
-			/>
-			<Slider
-				label="Pull"
-				bind:value={params.fractureStrength}
-				min={0}
-				max={8}
-				step={0.1}
-				format={fmt1}
-			/>
-			<Slider
-				label="Cell scale"
-				bind:value={params.fractureScale}
-				min={2}
-				max={16}
-				step={0.5}
-				format={fmt1}
-			/>
-			<Slider
-				label="Cell drift"
-				bind:value={params.fractureSpread}
-				min={0}
-				max={2}
-				step={0.05}
-				format={fmt2}
-			/>
-		</Section>
-
-		<Section title="Depth" kicker="10">
-			<Toggle
-				label="Depth scatter"
-				bind:checked={params.depthEnabled}
-				hint="Offsets points in screen space and varies their size: a shallow 3D shimmer."
-			/>
-			<Slider
-				label="Amount"
-				bind:value={params.depthStrength}
-				min={0}
-				max={3}
-				step={0.05}
-				format={fmt2}
-			/>
-		</Section>
-
-		<Section title="Modulation" kicker="11" open={false}>
-			<div class="lfo-head">
-				<span>4 routes · retrigger</span>
-				<button type="button" class="mini-button" onclick={triggerAllLfos}>Trigger all</button>
-			</div>
-
-			{#each params.lfos as lfo, index}
-				<div class="lfo" class:off={!lfo.enabled}>
-					<div class="lfo-row">
-						<span class="lfo-name">LFO {index + 1}</span>
-						<select
-							bind:value={params.lfos[index].target}
-							aria-label={`LFO ${index + 1} target`}
-						>
-							<option value="curl">Curl</option>
-							<option value="scale">Noise scale</option>
-							<option value="spring">Spring</option>
-							<option value="pointer">Pointer</option>
-							<option value="pulse">Pulse</option>
-							<option value="wave">Wave</option>
-							<option value="fracture">Fracture</option>
-							<option value="depth">Depth</option>
-							<option value="size">Point size</option>
-							<option value="opacity">Opacity</option>
-						</select>
-						<select
-							bind:value={params.lfos[index].shape}
-							aria-label={`LFO ${index + 1} shape`}
-						>
-							<option value="sine">Sine</option>
-							<option value="triangle">Triangle</option>
-							<option value="ramp">Ramp</option>
-							<option value="random">Random</option>
-						</select>
-						<button
-							class="lfo-trigger"
-							type="button"
-							onclick={() => triggerLfo(index)}
-							title={`Retrigger LFO ${index + 1}`}
-							aria-label={`Retrigger LFO ${index + 1}`}
-						>
-							↻
-						</button>
-						<button
-							class="lfo-power"
-							class:active={lfo.enabled}
-							type="button"
-							onclick={() => (params.lfos[index].enabled = !lfo.enabled)}
-							aria-label={`Turn LFO ${index + 1} ${lfo.enabled ? 'off' : 'on'}`}
-						>
-							{lfo.enabled ? 'on' : 'off'}
-						</button>
-					</div>
-
-					<div class="lfo-sliders">
-						<label class="mini-slider">
-							<span>Rate <b>{fmtHz(lfo.rate)}</b></span>
-							<input
-								type="range"
-								min="0.01"
-								max="1"
-								step="0.01"
-								bind:value={params.lfos[index].rate}
-								aria-label={`LFO ${index + 1} rate`}
+						{#if params.palette.mode === 'source'}
+							<p class="grade-hint">
+								Raw source colour. The additive stage tends to clip multicolour images.
+							</p>
+						{:else}
+							<Slider
+								label="Grade amount"
+								bind:value={params.palette.amount}
+								min={0}
+								max={1}
+								step={0.01}
+								format={fmt2}
+								hint="0 keeps the source, 1 is the full two-stop grade."
 							/>
-						</label>
-						<label class="mini-slider">
-							<span>Depth <b>{lfo.depth.toFixed(2)}</b></span>
-							<input
-								type="range"
-								min="0"
-								max="1"
-								step="0.01"
-								bind:value={params.lfos[index].depth}
-								aria-label={`LFO ${index + 1} depth`}
+							<Slider
+								label="Grade chroma"
+								bind:value={params.palette.chroma}
+								min={0}
+								max={1}
+								step={0.01}
+								format={fmt2}
 							/>
-						</label>
+							<p class="grade-hint">
+								Auto follows the strongest source hue and falls back to bone for black-and-white.
+							</p>
+						{/if}
 					</div>
+				{:else}
+					<p class="empty-copy">
+						Drop a photograph into the stage. It is analysed once, then broken into fine points.
+					</p>
+				{/if}
+			</Section>
+
+			<Section title="Presets" kicker="02" open={true}>
+				<div class="presets">
+					{#each PRESETS as preset, index}
+						<button
+							type="button"
+							class:active={activePreset === preset.id}
+							aria-pressed={activePreset === preset.id}
+							onclick={() => choosePreset(preset.id)}
+						>
+							<span class="preset-index">{String(index + 1).padStart(2, '0')}</span>
+							<span class="preset-name">{preset.name}</span>
+							<span class="preset-mark" aria-hidden="true">
+								{activePreset === preset.id ? '—' : '+'}
+							</span>
+						</button>
+					{/each}
 				</div>
-			{/each}
+				<p class="preset-note">{presetNote}</p>
 
-			<p class="lfo-hint">
-				Each route multiplies one parameter by <code>1 + signal × depth</code>. Retrigger restarts the
-				phase and swells the route back in; phases survive preset changes.
-			</p>
-		</Section>
+				<div class="transport">
+					<button type="button" onclick={() => field?.reassemble()} disabled={!analysis}>
+						<span>Reassemble</span><kbd>R</kbd>
+					</button>
+					<button type="button" onclick={() => field?.kick(1)} disabled={!analysis}>
+						<span>Pulse</span><kbd>Space</kbd>
+					</button>
+				</div>
 
-		<footer class="panel-footer">
-			<p><kbd>space</kbd> pulse · <kbd>R</kbd> reassemble</p>
-			<p>
-				{stats ? fmtCount(stats.count) : '—'} dots · {stats?.textureSize ?? '—'}² texture ·
-				{stats?.precision ?? 'GPU'}
-			</p>
-		</footer>
-	</aside>
+				<div class="seed-row">
+					<label class="seed">
+						<span>Seed</span>
+						<input
+							type="number"
+							min="0"
+							max="999999"
+							bind:value={params.seed}
+							onchange={resampleNow}
+						/>
+					</label>
+					<button class="dice" type="button" onclick={randomizeSeed} title="New seed" aria-label="New seed">
+						↻
+					</button>
+				</div>
 
-	<main
-		bind:this={stageEl}
-		class="stage"
-		class:dragging={dragActive}
-		ondragover={handleDragOver}
-		ondragleave={handleDragLeave}
-		ondrop={handleDrop}
-	>
-		<canvas bind:this={canvasEl} aria-label="GPU particle field"></canvas>
+				<button class="ghost" type="button" onclick={randomize}>Randomize look</button>
+			</Section>
 
-		<div class="hud" aria-live="off">
-			<span>{stats ? stats.fps.toFixed(0) : '—'} fps</span>
-			<span class="hud-sep">/</span>
-			<span>{hudCount}</span>
-		</div>
+			<Section title="Particles" kicker="03" open={true}>
+				<Slider
+					label="Count"
+					bind:value={params.particleCount}
+					min={32768}
+					max={262144}
+					step={64}
+					format={fmtCount}
+					hint="Up to 512 × 512 on the GPU. Resamples on release."
+					onchange={resampleNow}
+				/>
+				<Slider
+					label="Size"
+					bind:value={params.pointSize}
+					min={0.6}
+					max={4}
+					step={0.05}
+					format={fmt2}
+				/>
+				<Slider
+					label="Opacity"
+					bind:value={params.opacity}
+					min={0.2}
+					max={1}
+					step={0.01}
+					format={fmt2}
+				/>
+			</Section>
 
-		{#if !analysis}
-			<button class="drop" type="button" onclick={() => fileEl.click()}>
-				<span class="drop-kicker">Input</span>
-				<span class="drop-title">Drop an image</span>
-				<span class="drop-sub">or click to browse · JPG, PNG, WebP</span>
-			</button>
-		{/if}
+			<Section title="Flow field" kicker="04" open={true}>
+				<Toggle label="Curl noise" bind:checked={params.curlEnabled} />
+				<Slider
+					label="Strength"
+					bind:value={params.curlStrength}
+					min={0}
+					max={2.5}
+					step={0.05}
+					format={fmt2}
+				/>
+				<Slider
+					label="Scale"
+					bind:value={params.curlScale}
+					min={0.4}
+					max={4}
+					step={0.05}
+					format={fmt2}
+				/>
+				<Slider
+					label="Evolution speed"
+					bind:value={params.curlSpeed}
+					min={0}
+					max={0.6}
+					step={0.01}
+					format={fmt2}
+				/>
+			</Section>
 
-		{#if loading}
-			<div class="loading" role="status">
-				<span class="loading-line"></span>
-				<span>sampling the image</span>
+			<Section title="Return" kicker="05">
+				<Toggle label="Spring to origin" bind:checked={params.springEnabled} />
+				<Slider
+					label="Stiffness"
+					bind:value={params.spring}
+					min={0}
+					max={6}
+					step={0.05}
+					format={fmt2}
+				/>
+				<Slider
+					label="Damping"
+					bind:value={params.damping}
+					min={0.8}
+					max={0.99}
+					step={0.005}
+					format={fmt3}
+				/>
+				<Slider
+					label="Speed limit"
+					bind:value={params.maxSpeed}
+					min={0.5}
+					max={8}
+					step={0.1}
+					format={fmt1}
+				/>
+			</Section>
+
+			<Section title="Pointer" kicker="06">
+				<Toggle label="Pointer force" bind:checked={params.pointerEnabled} />
+				<Slider
+					label="Attract / repel"
+					bind:value={params.pointerStrength}
+					min={-4}
+					max={4}
+					step={0.1}
+					format={fmtSigned}
+					hint="Positive pulls toward the cursor, negative pushes away."
+				/>
+				<Slider
+					label="Radius"
+					bind:value={params.pointerRadius}
+					min={0.05}
+					max={1}
+					step={0.01}
+					format={fmt2}
+				/>
+				<Slider
+					label="Swirl"
+					bind:value={params.pointerSwirl}
+					min={0}
+					max={1.5}
+					step={0.05}
+					format={fmt2}
+				/>
+			</Section>
+
+			<Section title="Pulse" kicker="07">
+				<Toggle label="Radial pulse" bind:checked={params.pulseEnabled} />
+				<Toggle
+					label="Auto pulse"
+					bind:checked={params.autoPulse}
+					hint="A metronome in place of live audio. Phase 2 replaces it."
+				/>
+				<Slider
+					label="Strength"
+					bind:value={params.pulseStrength}
+					min={0}
+					max={8}
+					step={0.1}
+					format={fmt1}
+				/>
+				<Slider
+					label="Radius"
+					bind:value={params.pulseRadius}
+					min={0.1}
+					max={1}
+					step={0.01}
+					format={fmt2}
+				/>
+			</Section>
+
+			<Section title="Wave" kicker="08">
+				<Toggle label="Traveling ring" bind:checked={params.waveEnabled} />
+				<Slider
+					label="Strength"
+					bind:value={params.waveStrength}
+					min={0}
+					max={2}
+					step={0.05}
+					format={fmt2}
+				/>
+				<Slider
+					label="Wavenumber"
+					bind:value={params.waveFrequency}
+					min={1}
+					max={20}
+					step={0.5}
+					format={fmt1}
+				/>
+				<Slider
+					label="Phase speed"
+					bind:value={params.waveSpeed}
+					min={0}
+					max={6}
+					step={0.1}
+					format={fmt1}
+				/>
+			</Section>
+
+			<Section title="Fracture" kicker="09">
+				<Toggle
+					label="Voronoi shards"
+					bind:checked={params.fractureEnabled}
+					hint="Particles cluster into jittered cells that drift apart."
+				/>
+				<Slider
+					label="Pull"
+					bind:value={params.fractureStrength}
+					min={0}
+					max={8}
+					step={0.1}
+					format={fmt1}
+				/>
+				<Slider
+					label="Cell scale"
+					bind:value={params.fractureScale}
+					min={2}
+					max={16}
+					step={0.5}
+					format={fmt1}
+				/>
+				<Slider
+					label="Cell drift"
+					bind:value={params.fractureSpread}
+					min={0}
+					max={2}
+					step={0.05}
+					format={fmt2}
+				/>
+			</Section>
+
+			<Section title="Depth" kicker="10">
+				<Toggle
+					label="Depth scatter"
+					bind:checked={params.depthEnabled}
+					hint="Offsets points in screen space and varies their size: a shallow 3D shimmer."
+				/>
+				<Slider
+					label="Amount"
+					bind:value={params.depthStrength}
+					min={0}
+					max={3}
+					step={0.05}
+					format={fmt2}
+				/>
+			</Section>
+
+			<Section title="Modulation" kicker="11" open={false}>
+				<div class="lfo-head">
+					<span>4 routes · retrigger</span>
+					<button type="button" class="mini-button" onclick={triggerAllLfos}>Trigger all</button>
+				</div>
+
+				{#each params.lfos as lfo, index}
+					<div class="lfo" class:off={!lfo.enabled}>
+						<div class="lfo-row">
+							<span class="lfo-name">LFO {String(index + 1).padStart(2, '0')}</span>
+							<select
+								bind:value={params.lfos[index].target}
+								aria-label={`LFO ${index + 1} target`}
+							>
+								<option value="curl">Curl</option>
+								<option value="scale">Scale</option>
+								<option value="spring">Spring</option>
+								<option value="pointer">Pointer</option>
+								<option value="pulse">Pulse</option>
+								<option value="wave">Wave</option>
+								<option value="fracture">Fracture</option>
+								<option value="depth">Depth</option>
+								<option value="size">Size</option>
+								<option value="opacity">Opacity</option>
+							</select>
+							<select
+								bind:value={params.lfos[index].shape}
+								aria-label={`LFO ${index + 1} shape`}
+							>
+								<option value="sine">Sine</option>
+								<option value="triangle">Tri</option>
+								<option value="ramp">Ramp</option>
+								<option value="random">Random</option>
+							</select>
+							<button
+								class="lfo-trigger"
+								type="button"
+								onclick={() => triggerLfo(index)}
+								title={`Retrigger LFO ${index + 1}`}
+								aria-label={`Retrigger LFO ${index + 1}`}
+							>
+								↻
+							</button>
+							<button
+								class="lfo-power"
+								class:active={lfo.enabled}
+								type="button"
+								onclick={() => (params.lfos[index].enabled = !lfo.enabled)}
+								aria-label={`Turn LFO ${index + 1} ${lfo.enabled ? 'off' : 'on'}`}
+							>
+								{lfo.enabled ? 'on' : 'off'}
+							</button>
+						</div>
+
+						<div class="lfo-sliders">
+							<label class="mini-slider">
+								<span>Rate <b>{fmtHz(lfo.rate)}</b></span>
+								<input
+									type="range"
+									min="0.01"
+									max="1"
+									step="0.01"
+									bind:value={params.lfos[index].rate}
+									aria-label={`LFO ${index + 1} rate`}
+								/>
+							</label>
+							<label class="mini-slider">
+								<span>Depth <b>{lfo.depth.toFixed(2)}</b></span>
+								<input
+									type="range"
+									min="0"
+									max="1"
+									step="0.01"
+									bind:value={params.lfos[index].depth}
+									aria-label={`LFO ${index + 1} depth`}
+								/>
+							</label>
+						</div>
+					</div>
+				{/each}
+
+				<p class="lfo-hint">
+					Each route multiplies one parameter by <code>1 + signal × depth</code>. Retrigger restarts
+					the phase and swells the route back in; phases survive preset changes.
+				</p>
+			</Section>
+
+			<footer class="panel-footer">
+				<p><kbd>Space</kbd> pulse <span aria-hidden="true">/</span> <kbd>R</kbd> reassemble</p>
+				<p>
+					{stats ? fmtCount(stats.count) : '—'} dots · {stats?.textureSize ?? '—'}² texture ·
+					{stats?.precision ?? 'GPU'}
+				</p>
+			</footer>
+		</aside>
+
+		<main
+			bind:this={stageEl}
+			class="stage"
+			class:dragging={dragActive}
+			ondragover={handleDragOver}
+			ondragleave={handleDragLeave}
+			ondrop={handleDrop}
+		>
+			<canvas bind:this={canvasEl} aria-label="GPU particle field"></canvas>
+
+			<div class="ticks" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+
+			<div class="stage-line stage-line-top">
+				<span>Fig. 01 — Portrait in dust</span>
+				<span class="hud" aria-live="off">
+					{stats ? stats.fps.toFixed(0) : '—'} fps / {hudCount}
+				</span>
 			</div>
-		{/if}
 
-		{#if errorMessage}
-			<div class="error" role="alert">
-				<span>{errorMessage}</span>
-				<button type="button" onclick={() => (errorMessage = '')} aria-label="Dismiss error">×</button>
+			<div class="stage-line stage-line-bottom">
+				<span>{analysis ? 'Move pointer to distort' : 'Input — JPG / PNG / WebP'}</span>
+				<span>
+					{stats ? `${stats.textureSize}² / ${stats.precision}` : 'WebGL2 / render-to-float'}
+				</span>
 			</div>
-		{/if}
-	</main>
+
+			{#if !analysis}
+				<button class="drop" type="button" onclick={() => fileEl.click()}>
+					<span class="drop-top"><span>Input / 00</span><span aria-hidden="true">+</span></span>
+					<span class="drop-title">Drop<br />an image</span>
+					<span class="drop-sub">JPG · PNG · WebP — click to browse</span>
+				</button>
+			{/if}
+
+			{#if loading}
+				<div class="loading" role="status">
+					<span class="loading-line"></span>
+					<span>Sampling image</span>
+				</div>
+			{/if}
+
+			{#if errorMessage}
+				<div class="error" role="alert">
+					<span><b>Error</b> — {errorMessage}</span>
+					<button type="button" onclick={() => (errorMessage = '')} aria-label="Dismiss error">×</button>
+				</div>
+			{/if}
+		</main>
+	</div>
 </div>
 
 <style>
@@ -749,12 +845,108 @@
 		pointer-events: none;
 	}
 
+	.frame {
+		height: calc(100dvh - 20px);
+		margin: 10px;
+		display: flex;
+		flex-direction: column;
+		overflow: hidden;
+		border: 1px solid var(--ink);
+		background: var(--paper);
+	}
+
+	.masthead {
+		flex: 0 0 54px;
+		display: flex;
+		align-items: stretch;
+		justify-content: space-between;
+		min-width: 0;
+		border-bottom: 1px solid var(--ink);
+	}
+	.brand {
+		display: flex;
+		align-items: center;
+		gap: 12px;
+		min-width: 0;
+		padding: 0 16px;
+	}
+	.brand-name {
+		font-family: var(--sans);
+		font-size: 22px;
+		font-weight: 600;
+		line-height: 1;
+		letter-spacing: -0.045em;
+		text-transform: uppercase;
+		text-decoration: none;
+	}
+	.brand-sub {
+		padding-left: 12px;
+		border-left: 1px solid var(--line);
+		font-family: var(--mono);
+		font-size: 8px;
+		letter-spacing: 0.02em;
+		text-transform: uppercase;
+		color: var(--muted);
+		white-space: nowrap;
+	}
+	.mast-meta,
+	.mast-stats {
+		display: flex;
+		align-items: stretch;
+		min-width: 0;
+	}
+	.mast-meta span,
+	.mast-stats span {
+		display: flex;
+		align-items: center;
+		padding: 0 13px;
+		border-left: 1px solid var(--line);
+		font-family: var(--mono);
+		font-size: 8px;
+		letter-spacing: 0.02em;
+		text-transform: uppercase;
+		color: var(--muted);
+		white-space: nowrap;
+	}
+	.mast-stats span:last-of-type {
+		color: var(--ink);
+	}
+	.look {
+		display: flex;
+		align-items: stretch;
+		border-left: 1px solid var(--line);
+	}
+	.look button {
+		padding: 0 11px;
+		border: 0;
+		background: transparent;
+		color: var(--muted);
+		font-family: var(--mono);
+		font-size: 8px;
+		letter-spacing: 0.02em;
+		text-transform: uppercase;
+		transition:
+			background 120ms ease,
+			color 120ms ease;
+	}
+	.look button + button {
+		border-left: 1px solid var(--line);
+	}
+	.look button:hover {
+		color: var(--ink);
+	}
+	.look button.active {
+		background: var(--ink);
+		color: var(--paper);
+	}
+
 	.app {
 		display: grid;
-		grid-template-columns: 360px minmax(0, 1fr);
-		height: 100dvh;
+		grid-template-columns: clamp(330px, 26vw, 400px) minmax(0, 1fr);
+		flex: 1;
+		min-height: 0;
 		overflow: hidden;
-		background: var(--bg);
+		background: var(--paper);
 	}
 
 	.panel {
@@ -763,41 +955,79 @@
 		height: 100%;
 		overflow-y: auto;
 		overscroll-behavior: contain;
-		padding: 26px 26px 20px;
-		background:
-			linear-gradient(180deg, rgba(255, 255, 255, 0.018), transparent 180px),
-			var(--panel);
-		border-right: 1px solid var(--line);
+		padding: 0 17px 24px;
+		background: var(--paper);
+		border-right: 1px solid var(--ink);
 		scrollbar-width: thin;
-		scrollbar-color: var(--line-bright) transparent;
+		scrollbar-color: var(--line-strong) transparent;
 	}
 	.panel::-webkit-scrollbar {
-		width: 5px;
+		width: 4px;
 	}
 	.panel::-webkit-scrollbar-thumb {
-		background: var(--line-bright);
-		border-radius: 10px;
+		background: var(--line-strong);
 	}
 
-	.masthead {
-		padding-bottom: 22px;
-		border-bottom: 1px solid var(--line);
-		margin-bottom: 2px;
+	.panel-head {
+		padding: 18px 0 9px;
 	}
-	.wordmark {
-		font-family: var(--serif);
-		font-size: 38px;
-		line-height: 0.95;
-		letter-spacing: -0.035em;
-		font-weight: 400;
-	}
-	.tagline {
-		margin: 8px 0 0;
+	.panel-eyebrow {
+		display: flex;
+		justify-content: space-between;
+		gap: 12px;
+		margin-bottom: 25px;
 		font-family: var(--mono);
-		font-size: 9px;
-		letter-spacing: 0.18em;
+		font-size: 8px;
+		letter-spacing: 0.02em;
 		text-transform: uppercase;
 		color: var(--muted);
+	}
+	.panel-title {
+		margin: 0;
+		font-family: var(--sans);
+		font-size: clamp(30px, 2.75vw, 38px);
+		font-weight: 500;
+		line-height: 0.88;
+		letter-spacing: -0.055em;
+		text-transform: uppercase;
+	}
+	.panel-lede {
+		margin: 15px 0 0;
+		font-family: var(--mono);
+		font-size: 9px;
+		line-height: 1.58;
+		letter-spacing: 0.005em;
+		text-transform: uppercase;
+		text-align: justify;
+		text-align-last: left;
+		color: var(--ink-soft);
+	}
+	.panel-lede strong {
+		font-weight: 500;
+	}
+	.panel-spec {
+		display: grid;
+		grid-template-columns: repeat(3, 1fr);
+		margin-top: 18px;
+		border-top: 1px solid var(--line);
+	}
+	.panel-spec span {
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+		padding: 8px 8px 0 0;
+		font-family: var(--mono);
+		font-size: 7px;
+		letter-spacing: 0.03em;
+		text-transform: uppercase;
+		color: var(--muted);
+	}
+	.panel-spec b {
+		font-family: var(--mono);
+		font-size: 10px;
+		font-weight: 400;
+		letter-spacing: -0.02em;
+		color: var(--ink);
 	}
 
 	.upload {
@@ -805,134 +1035,330 @@
 		align-items: center;
 		justify-content: space-between;
 		width: 100%;
-		padding: 12px 14px;
-		border: 1px solid var(--line-bright);
-		border-radius: 2px;
+		padding: 10px 11px;
+		border: 1px solid var(--ink);
 		background: transparent;
-		color: var(--paper);
+		color: var(--ink);
 		font-family: var(--mono);
-		font-size: 10px;
-		letter-spacing: 0.1em;
+		font-size: 9px;
+		letter-spacing: 0.025em;
 		text-transform: uppercase;
 		transition:
-			border-color 150ms ease,
-			background 150ms ease;
+			background 120ms ease,
+			color 120ms ease;
 	}
 	.upload:hover {
-		border-color: var(--accent);
-		background: var(--accent-soft);
+		background: var(--ink);
+		color: var(--paper);
 	}
 	.upload-plus {
+		font-family: var(--sans);
 		font-size: 16px;
 		line-height: 1;
-		color: var(--accent);
 	}
 
 	.preview {
-		margin-top: 12px;
-		border: 1px solid var(--line);
-		background: #000;
+		margin-top: 10px;
+		border: 1px solid var(--ink);
+		background: var(--stage);
 	}
 	.preview img {
 		display: block;
 		width: 100%;
-		max-height: 160px;
+		max-height: 180px;
 		object-fit: cover;
-		filter: saturate(0.9) contrast(1.02);
+		filter: saturate(0.92) contrast(1.03);
 	}
 	.preview-meta {
 		display: flex;
 		justify-content: space-between;
 		gap: 12px;
-		padding: 8px 10px;
-		border-top: 1px solid var(--line);
+		padding: 6px 8px;
+		border-top: 1px solid var(--line-strong);
+		background: var(--paper);
 	}
 	.filename {
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
 		font-family: var(--mono);
-		font-size: 9px;
-		color: var(--paper-dim);
+		font-size: 8px;
+		text-transform: uppercase;
+		color: var(--ink-soft);
 	}
 	.dims {
 		flex: 0 0 auto;
 		font-family: var(--mono);
-		font-size: 9px;
+		font-size: 8px;
 		color: var(--muted);
 	}
 
 	.palette {
 		display: flex;
-		gap: 2px;
-		height: 8px;
+		gap: 1px;
+		height: 7px;
 		margin-top: 10px;
+		border: 1px solid var(--ink);
+		background: var(--ink);
 	}
 	.swatch {
-		min-width: 4px;
+		min-width: 3px;
 		height: 100%;
-		border-radius: 1px;
 	}
 	.palette-caption {
-		margin: 6px 0 18px;
+		margin: 5px 0 15px;
 		font-family: var(--mono);
-		font-size: 8px;
-		letter-spacing: 0.14em;
+		font-size: 7px;
+		letter-spacing: 0.04em;
 		text-transform: uppercase;
 		color: var(--muted);
 	}
 
 	.grade-block {
-		margin-top: 4px;
-		padding-top: 14px;
+		margin-top: 3px;
+		padding-top: 12px;
 		border-top: 1px solid var(--line);
 	}
 	.block-label {
-		margin-bottom: 8px;
+		display: flex;
+		justify-content: space-between;
+		gap: 10px;
+		margin-bottom: 7px;
 		font-family: var(--mono);
-		font-size: 9px;
-		letter-spacing: 0.14em;
+		font-size: 8px;
+		letter-spacing: 0.03em;
 		text-transform: uppercase;
 		color: var(--muted);
+	}
+	.block-label span:last-child {
+		color: var(--ink);
 	}
 	.chips {
 		display: grid;
 		grid-template-columns: repeat(3, 1fr);
-		gap: 4px;
+		border-top: 1px solid var(--line-strong);
+		border-left: 1px solid var(--line-strong);
 	}
 	.chips button {
-		padding: 7px 4px;
-		border: 1px solid var(--line);
-		background: var(--panel-raised);
-		color: var(--paper-dim);
+		padding: 7px 3px;
+		border: 0;
+		border-right: 1px solid var(--line-strong);
+		border-bottom: 1px solid var(--line-strong);
+		background: transparent;
+		color: var(--ink-soft);
 		font-family: var(--mono);
 		font-size: 8px;
-		letter-spacing: 0.06em;
+		letter-spacing: 0.02em;
 		text-transform: uppercase;
 		transition:
-			border-color 140ms ease,
-			color 140ms ease,
-			background 140ms ease;
+			background 120ms ease,
+			color 120ms ease;
 	}
 	.chips button:hover {
-		border-color: var(--line-bright);
-		color: var(--paper);
+		background: var(--paper-raised);
 	}
 	.chips button.active {
-		border-color: var(--accent);
-		color: var(--accent);
-		background: var(--accent-soft);
+		background: var(--ink);
+		color: var(--paper);
 	}
 	.grade-preview {
-		height: 7px;
-		margin: 8px 0 13px;
-		border: 1px solid var(--line);
+		height: 9px;
+		margin: 9px 0 12px;
+		border: 1px solid var(--ink);
 	}
 	.grade-hint {
-		margin: 0 0 12px;
-		font-size: 10px;
-		line-height: 1.45;
+		margin: 0 0 11px;
+		font-family: var(--mono);
+		font-size: 8px;
+		line-height: 1.55;
+		text-transform: uppercase;
 		color: var(--muted);
+	}
+	.empty-copy {
+		margin: 12px 0 0;
+		font-family: var(--mono);
+		font-size: 8px;
+		line-height: 1.6;
+		text-transform: uppercase;
+		color: var(--muted);
+	}
+
+	.presets {
+		border-top: 1px solid var(--line-strong);
+	}
+	.presets button {
+		display: grid;
+		grid-template-columns: 24px minmax(0, 1fr) 12px;
+		align-items: center;
+		gap: 8px;
+		width: 100%;
+		padding: 7px 7px;
+		border: 0;
+		border-bottom: 1px solid var(--line);
+		background: transparent;
+		color: var(--ink);
+		text-align: left;
+		transition:
+			background 120ms ease,
+			color 120ms ease;
+	}
+	.presets button:last-child {
+		border-bottom-color: var(--line-strong);
+	}
+	.presets button:hover {
+		background: var(--paper-raised);
+	}
+	.preset-index {
+		font-family: var(--mono);
+		font-size: 8px;
+		color: var(--muted);
+	}
+	.preset-name {
+		font-family: var(--sans);
+		font-size: 11px;
+		font-weight: 500;
+		letter-spacing: 0.015em;
+		text-transform: uppercase;
+	}
+	.preset-mark {
+		justify-self: end;
+		font-family: var(--mono);
+		font-size: 9px;
+		color: var(--muted);
+	}
+	.presets button.active {
+		background: var(--ink);
+		color: var(--paper);
+	}
+	.presets button.active .preset-index,
+	.presets button.active .preset-mark {
+		color: var(--paper);
+		opacity: 0.6;
+	}
+	.preset-note {
+		min-height: 34px;
+		margin: 9px 0 12px;
+		font-family: var(--mono);
+		font-size: 8px;
+		line-height: 1.55;
+		text-transform: uppercase;
+		color: var(--muted);
+	}
+
+	.transport {
+		display: grid;
+		grid-template-columns: 1fr 1fr;
+		margin-bottom: 7px;
+		border: 1px solid var(--ink);
+	}
+	.transport button {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 6px;
+		padding: 8px 8px;
+		border: 0;
+		background: transparent;
+		color: var(--ink);
+		font-family: var(--mono);
+		font-size: 8px;
+		letter-spacing: 0.02em;
+		text-transform: uppercase;
+		transition:
+			background 120ms ease,
+			color 120ms ease;
+	}
+	.transport button + button {
+		border-left: 1px solid var(--ink);
+	}
+	.transport button:hover:not(:disabled) {
+		background: var(--ink);
+		color: var(--paper);
+	}
+	.transport button:disabled {
+		opacity: 0.3;
+		cursor: not-allowed;
+	}
+	kbd {
+		padding: 1px 3px;
+		border: 1px solid currentColor;
+		border-radius: 0;
+		font-family: var(--mono);
+		font-size: 7px;
+		line-height: 1.2;
+		opacity: 0.75;
+	}
+
+	.seed-row {
+		display: flex;
+		margin-bottom: 7px;
+		border: 1px solid var(--ink);
+	}
+	.seed {
+		display: flex;
+		flex: 1;
+		align-items: center;
+		gap: 8px;
+		min-width: 0;
+		padding: 6px 8px;
+	}
+	.seed span {
+		font-family: var(--mono);
+		font-size: 8px;
+		letter-spacing: 0.03em;
+		text-transform: uppercase;
+		color: var(--muted);
+	}
+	.seed input {
+		width: 100%;
+		min-width: 0;
+		padding: 0;
+		border: 0;
+		outline: 0;
+		background: transparent;
+		font-family: var(--mono);
+		font-size: 10px;
+		color: var(--ink);
+	}
+	.seed input::-webkit-inner-spin-button,
+	.seed input::-webkit-outer-spin-button {
+		-webkit-appearance: none;
+		margin: 0;
+	}
+	.dice {
+		width: 32px;
+		border: 0;
+		border-left: 1px solid var(--ink);
+		background: transparent;
+		color: var(--ink);
+		font-family: var(--mono);
+		font-size: 13px;
+		line-height: 1;
+		transition:
+			background 120ms ease,
+			color 120ms ease;
+	}
+	.dice:hover {
+		background: var(--ink);
+		color: var(--paper);
+	}
+	.ghost {
+		width: 100%;
+		padding: 8px;
+		border: 1px solid var(--ink);
+		background: transparent;
+		color: var(--ink);
+		font-family: var(--mono);
+		font-size: 8px;
+		letter-spacing: 0.03em;
+		text-transform: uppercase;
+		transition:
+			background 120ms ease,
+			color 120ms ease;
+	}
+	.ghost:hover {
+		background: var(--ink);
+		color: var(--paper);
 	}
 
 	.lfo-head {
@@ -940,124 +1366,122 @@
 		align-items: center;
 		justify-content: space-between;
 		gap: 8px;
-		margin-bottom: 10px;
+		margin-bottom: 8px;
 	}
 	.lfo-head > span {
 		font-family: var(--mono);
-		font-size: 9px;
-		letter-spacing: 0.08em;
+		font-size: 8px;
+		letter-spacing: 0.02em;
 		text-transform: uppercase;
 		color: var(--muted);
 	}
 	.mini-button {
-		padding: 6px 8px;
-		border: 1px solid var(--line-bright);
+		padding: 5px 7px;
+		border: 1px solid var(--ink);
 		background: transparent;
-		color: var(--paper-dim);
+		color: var(--ink);
 		font-family: var(--mono);
-		font-size: 8px;
-		letter-spacing: 0.08em;
+		font-size: 7px;
+		letter-spacing: 0.03em;
 		text-transform: uppercase;
 		transition:
-			border-color 140ms ease,
-			color 140ms ease;
+			background 120ms ease,
+			color 120ms ease;
 	}
 	.mini-button:hover {
-		border-color: var(--accent);
-		color: var(--accent);
+		background: var(--ink);
+		color: var(--paper);
 	}
 	.lfo {
-		margin-bottom: 7px;
-		padding: 8px 8px 2px;
-		border: 1px solid var(--line);
-		background: rgba(255, 255, 255, 0.012);
+		padding: 9px 0 3px;
+		border-top: 1px solid var(--line);
 	}
 	.lfo.off {
-		opacity: 0.5;
+		opacity: 0.45;
 	}
 	.lfo-row {
-		display: flex;
+		display: grid;
+		grid-template-columns: 30px minmax(0, 1fr) 58px 22px 26px;
 		align-items: center;
 		gap: 4px;
 	}
 	.lfo-name {
-		flex: 0 0 auto;
-		width: 33px;
 		font-family: var(--mono);
-		font-size: 8px;
-		letter-spacing: 0.06em;
+		font-size: 7px;
+		letter-spacing: 0.02em;
 		text-transform: uppercase;
 		color: var(--muted);
 	}
 	.lfo select {
-		flex: 1 1 0;
+		width: 100%;
 		min-width: 0;
 		height: 23px;
 		padding: 0 2px;
-		border: 1px solid var(--line);
+		border: 1px solid var(--line-strong);
 		border-radius: 0;
-		background: var(--panel-raised);
-		color: var(--paper-dim);
+		background: transparent;
+		color: var(--ink);
 		font-family: var(--mono);
 		font-size: 8px;
+		text-transform: uppercase;
+	}
+	.lfo select:focus-visible {
+		outline: 1px solid var(--ink);
+		outline-offset: 0;
 	}
 	.lfo-trigger,
 	.lfo-power {
-		flex: 0 0 auto;
 		height: 23px;
 		padding: 0;
-		border: 1px solid var(--line);
-		background: var(--panel-raised);
-		color: var(--muted);
+		border: 1px solid var(--line-strong);
+		background: transparent;
+		color: var(--ink);
 		font-family: var(--mono);
 		line-height: 1;
 		transition:
-			border-color 140ms ease,
-			color 140ms ease,
-			background 140ms ease;
+			background 120ms ease,
+			color 120ms ease,
+			border-color 120ms ease;
 	}
 	.lfo-trigger {
-		width: 23px;
-		font-size: 12px;
+		font-size: 11px;
 	}
 	.lfo-power {
-		width: 28px;
 		font-size: 7px;
-		letter-spacing: 0.05em;
+		letter-spacing: 0.02em;
 		text-transform: uppercase;
 	}
-	.lfo-trigger:hover,
-	.lfo-power:hover {
-		border-color: var(--line-bright);
-		color: var(--paper);
+	.lfo-trigger:hover {
+		border-color: var(--ink);
 	}
 	.lfo-power.active {
-		border-color: var(--accent);
-		color: var(--accent);
-		background: var(--accent-soft);
+		border-color: var(--ink);
+		background: var(--ink);
+		color: var(--paper);
 	}
 	.lfo-sliders {
 		display: grid;
 		grid-template-columns: 1fr 1fr;
 		gap: 10px;
-		margin-top: 7px;
+		margin-top: 6px;
 	}
 	.mini-slider {
 		display: block;
-		margin: 0 0 6px;
+		margin: 0 0 4px;
 	}
 	.mini-slider > span {
 		display: flex;
 		justify-content: space-between;
 		gap: 6px;
 		font-family: var(--mono);
-		font-size: 8px;
-		letter-spacing: 0.04em;
+		font-size: 7px;
+		letter-spacing: 0.02em;
+		text-transform: uppercase;
 		color: var(--muted);
 	}
 	.mini-slider b {
 		font-weight: 400;
-		color: var(--paper-dim);
+		color: var(--ink-soft);
 		font-variant-numeric: tabular-nums;
 	}
 	.mini-slider input[type='range'] {
@@ -1065,315 +1489,256 @@
 		appearance: none;
 		display: block;
 		width: 100%;
-		height: 14px;
-		margin: 3px 0 0;
+		height: 12px;
+		margin: 2px 0 0;
 		background: transparent;
 		cursor: ew-resize;
 	}
 	.mini-slider input[type='range']::-webkit-slider-runnable-track {
 		height: 1px;
-		background: var(--line-bright);
+		background: var(--line-strong);
 	}
 	.mini-slider input[type='range']::-webkit-slider-thumb {
 		-webkit-appearance: none;
-		width: 8px;
-		height: 8px;
-		margin-top: -3.5px;
-		border-radius: 50%;
-		background: var(--paper);
-		box-shadow: 0 0 0 2px var(--panel);
-	}
-	.mini-slider input[type='range']:hover::-webkit-slider-thumb {
-		background: var(--accent);
+		width: 6px;
+		height: 6px;
+		margin-top: -2.5px;
+		border: 0;
+		border-radius: 0;
+		background: var(--ink);
 	}
 	.mini-slider input[type='range']::-moz-range-track {
 		height: 1px;
-		background: var(--line-bright);
+		background: var(--line-strong);
 	}
 	.mini-slider input[type='range']::-moz-range-thumb {
-		width: 8px;
-		height: 8px;
+		width: 6px;
+		height: 6px;
 		border: 0;
-		border-radius: 50%;
-		background: var(--paper);
+		border-radius: 0;
+		background: var(--ink);
 	}
 	.lfo-hint {
-		margin: 2px 0 12px;
-		font-size: 10px;
-		line-height: 1.5;
+		margin: 3px 0 2px;
+		font-family: var(--mono);
+		font-size: 8px;
+		line-height: 1.55;
+		text-transform: uppercase;
 		color: var(--muted);
 	}
 	.lfo-hint code {
 		font-family: var(--mono);
-		font-size: 9px;
-		color: var(--paper-dim);
-	}
-
-	.empty-copy {
-		margin: 14px 0 0;
-		font-size: 11px;
-		line-height: 1.55;
-		color: var(--muted);
-	}
-
-	.presets {
-		display: grid;
-		grid-template-columns: repeat(3, 1fr);
-		gap: 5px;
-	}
-	.presets button,
-	.transport button,
-	.ghost,
-	.dice {
-		border: 1px solid var(--line);
-		background: var(--panel-raised);
-		color: var(--paper-dim);
-		transition:
-			border-color 140ms ease,
-			color 140ms ease,
-			background 140ms ease;
-	}
-	.presets button {
-		padding: 9px 4px;
-		font-family: var(--mono);
-		font-size: 9px;
-		letter-spacing: 0.07em;
-		text-transform: uppercase;
-	}
-	.presets button:hover,
-	.transport button:hover:not(:disabled),
-	.ghost:hover,
-	.dice:hover {
-		border-color: var(--line-bright);
-		color: var(--paper);
-	}
-	.presets button.active {
-		border-color: var(--accent);
-		color: var(--accent);
-		background: var(--accent-soft);
-	}
-	.preset-note {
-		min-height: 32px;
-		margin: 10px 0 13px;
-		font-size: 10px;
-		line-height: 1.5;
-		color: var(--muted);
-	}
-
-	.transport {
-		display: grid;
-		grid-template-columns: 1fr 1fr;
-		gap: 5px;
-		margin-bottom: 12px;
-	}
-	.transport button {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 6px;
-		padding: 9px 10px;
-		font-family: var(--mono);
-		font-size: 9px;
-		letter-spacing: 0.06em;
-		text-transform: uppercase;
-	}
-	.transport button:disabled,
-	.ghost:disabled {
-		opacity: 0.35;
-		cursor: not-allowed;
-	}
-
-	.seed-row {
-		display: flex;
-		gap: 5px;
-		margin-bottom: 6px;
-	}
-	.seed {
-		display: flex;
-		flex: 1;
-		align-items: center;
-		gap: 8px;
-		padding: 7px 9px;
-		border: 1px solid var(--line);
-		background: transparent;
-	}
-	.seed span {
-		font-family: var(--mono);
-		font-size: 9px;
-		letter-spacing: 0.08em;
-		text-transform: uppercase;
-		color: var(--muted);
-	}
-	.seed input {
-		width: 100%;
-		min-width: 0;
-		border: 0;
-		outline: 0;
-		background: transparent;
-		font-family: var(--mono);
-		font-size: 10px;
-		color: var(--paper);
-	}
-	.dice {
-		width: 34px;
-		font-size: 15px;
-		line-height: 1;
-	}
-	.ghost {
-		width: 100%;
-		padding: 8px;
-		font-family: var(--mono);
-		font-size: 9px;
-		letter-spacing: 0.08em;
-		text-transform: uppercase;
-		background: transparent;
+		font-size: 8px;
+		color: var(--ink-soft);
+		text-transform: none;
 	}
 
 	.panel-footer {
 		margin-top: 18px;
-		padding-top: 14px;
-		border-top: 1px solid var(--line);
+		padding-top: 10px;
+		border-top: 1px solid var(--ink);
 	}
 	.panel-footer p {
-		margin: 0 0 5px;
+		margin: 0 0 4px;
 		font-family: var(--mono);
-		font-size: 8px;
+		font-size: 7px;
 		line-height: 1.5;
-		letter-spacing: 0.04em;
+		letter-spacing: 0.02em;
+		text-transform: uppercase;
 		color: var(--muted);
-	}
-	kbd {
-		padding: 1px 4px;
-		border: 1px solid var(--line-bright);
-		border-radius: 2px;
-		font-family: var(--mono);
-		font-size: 8px;
-		color: var(--paper-dim);
 	}
 
 	.stage {
 		position: relative;
 		min-width: 0;
 		overflow: hidden;
-		background: var(--bg);
+		background: var(--stage);
+		color: var(--stage-ink);
 	}
 	.stage canvas {
 		position: absolute;
 		inset: 0;
+		display: block;
 		width: 100%;
 		height: 100%;
-		display: block;
 		touch-action: none;
-	}
-	.stage::after {
-		content: '';
-		position: absolute;
-		inset: 0;
-		z-index: 2;
-		pointer-events: none;
-		background: radial-gradient(circle at 50% 48%, transparent 38%, rgba(0, 0, 0, 0.28) 100%);
-	}
-	.stage.dragging::before {
-		content: '';
-		position: absolute;
-		inset: 18px;
-		z-index: 4;
-		border: 1px solid var(--accent);
-		background: rgba(217, 162, 75, 0.04);
-		pointer-events: none;
+		cursor: crosshair;
 	}
 
-	.hud {
+	.ticks {
 		position: absolute;
-		top: 18px;
-		right: 20px;
+		inset: 10px;
 		z-index: 3;
+		pointer-events: none;
+	}
+	.ticks i {
+		position: absolute;
+		width: 10px;
+		height: 10px;
+		border: 0 solid rgba(242, 240, 234, 0.34);
+	}
+	.ticks i:nth-child(1) {
+		top: 0;
+		left: 0;
+		border-top-width: 1px;
+		border-left-width: 1px;
+	}
+	.ticks i:nth-child(2) {
+		top: 0;
+		right: 0;
+		border-top-width: 1px;
+		border-right-width: 1px;
+	}
+	.ticks i:nth-child(3) {
+		bottom: 0;
+		left: 0;
+		border-bottom-width: 1px;
+		border-left-width: 1px;
+	}
+	.ticks i:nth-child(4) {
+		right: 0;
+		bottom: 0;
+		border-right-width: 1px;
+		border-bottom-width: 1px;
+	}
+
+	.stage-line {
+		position: absolute;
+		left: 26px;
+		right: 26px;
+		z-index: 4;
 		display: flex;
-		gap: 7px;
-		padding: 6px 8px;
-		border: 1px solid rgba(255, 255, 255, 0.06);
-		background: rgba(7, 7, 6, 0.55);
-		backdrop-filter: blur(6px);
+		align-items: center;
+		justify-content: space-between;
+		gap: 16px;
 		font-family: var(--mono);
 		font-size: 8px;
-		letter-spacing: 0.1em;
+		line-height: 1.3;
+		letter-spacing: 0.035em;
 		text-transform: uppercase;
-		color: var(--muted);
-		font-variant-numeric: tabular-nums;
+		color: var(--stage-muted);
+		pointer-events: none;
 	}
-	.hud-sep {
-		color: var(--line-bright);
+	.stage-line span {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.stage-line span:first-child {
+		color: var(--stage-ink);
+	}
+	.stage-line-top {
+		top: 20px;
+	}
+	.stage-line-bottom {
+		bottom: 20px;
+	}
+	.hud {
+		display: flex;
+		gap: 7px;
+		font-variant-numeric: tabular-nums;
+		color: var(--stage-muted);
+	}
+
+	.stage.dragging::after {
+		content: 'Release to sample';
+		position: absolute;
+		top: 50%;
+		left: 50%;
+		z-index: 6;
+		padding: 8px 11px;
+		border: 1px solid var(--ink);
+		background: var(--paper);
+		color: var(--ink);
+		font-family: var(--mono);
+		font-size: 9px;
+		letter-spacing: 0.03em;
+		text-transform: uppercase;
+		transform: translate(-50%, -50%);
+		pointer-events: none;
 	}
 
 	.drop {
 		position: absolute;
-		inset: 22px;
-		z-index: 3;
+		top: 50%;
+		left: 50%;
+		z-index: 5;
 		display: flex;
 		flex-direction: column;
-		align-items: center;
-		justify-content: center;
-		gap: 10px;
-		border: 1px dashed var(--line-bright);
-		background: radial-gradient(circle at 50% 45%, rgba(217, 162, 75, 0.05), transparent 60%);
-		color: var(--paper);
+		gap: 22px;
+		width: min(370px, calc(100% - 48px));
+		padding: 15px;
+		border: 1px solid var(--ink);
+		background: var(--paper);
+		color: var(--ink);
+		text-align: left;
+		transform: translate(-50%, -50%);
 		transition:
-			border-color 160ms ease,
-			background 160ms ease;
+			background 140ms ease,
+			color 140ms ease,
+			border-color 140ms ease;
 	}
 	.drop:hover {
-		border-color: var(--accent);
-		background: radial-gradient(circle at 50% 45%, rgba(217, 162, 75, 0.09), transparent 62%);
+		border-color: var(--stage-ink);
+		background: var(--stage);
+		color: var(--stage-ink);
 	}
-	.drop-kicker {
+	.drop-top {
+		display: flex;
+		justify-content: space-between;
+		gap: 12px;
 		font-family: var(--mono);
-		font-size: 9px;
-		letter-spacing: 0.24em;
+		font-size: 8px;
+		letter-spacing: 0.03em;
 		text-transform: uppercase;
-		color: var(--accent);
+	}
+	.drop-top span:last-child {
+		font-family: var(--sans);
+		font-size: 16px;
+		line-height: 0.8;
 	}
 	.drop-title {
-		font-family: var(--serif);
-		font-size: clamp(32px, 5vw, 64px);
-		font-weight: 400;
-		letter-spacing: -0.035em;
+		font-family: var(--sans);
+		font-size: clamp(36px, 4.2vw, 54px);
+		font-weight: 500;
+		line-height: 0.84;
+		letter-spacing: -0.06em;
+		text-transform: uppercase;
 	}
 	.drop-sub {
 		font-family: var(--mono);
-		font-size: 9px;
-		letter-spacing: 0.1em;
+		font-size: 8px;
+		letter-spacing: 0.02em;
 		text-transform: uppercase;
-		color: var(--muted);
 	}
 
 	.loading {
 		position: absolute;
 		inset: 0;
-		z-index: 5;
+		z-index: 6;
 		display: flex;
 		flex-direction: column;
 		align-items: center;
 		justify-content: center;
 		gap: 12px;
-		background: rgba(7, 7, 6, 0.7);
-		backdrop-filter: blur(3px);
+		background: rgba(5, 5, 5, 0.78);
+		color: var(--stage-ink);
 		font-family: var(--mono);
 		font-size: 9px;
-		letter-spacing: 0.16em;
+		letter-spacing: 0.06em;
 		text-transform: uppercase;
-		color: var(--paper-dim);
 	}
 	.loading-line {
-		width: 120px;
+		width: 140px;
 		height: 1px;
-		background: linear-gradient(90deg, transparent, var(--accent), transparent);
+		background: var(--stage-ink);
 		animation: sweep 1.1s ease-in-out infinite;
 	}
 	@keyframes sweep {
 		0%,
 		100% {
 			opacity: 0.25;
-			transform: scaleX(0.45);
+			transform: scaleX(0.35);
 		}
 		50% {
 			opacity: 1;
@@ -1383,61 +1748,147 @@
 
 	.error {
 		position: absolute;
-		left: 50%;
-		bottom: 22px;
-		z-index: 6;
+		right: 19px;
+		bottom: 44px;
+		left: 19px;
+		z-index: 7;
 		display: flex;
-		align-items: center;
-		gap: 14px;
-		max-width: min(520px, calc(100% - 44px));
-		padding: 10px 12px;
-		border: 1px solid rgba(208, 106, 85, 0.55);
-		background: rgba(34, 15, 12, 0.94);
-		font-size: 11px;
-		line-height: 1.45;
-		color: #f0c6bc;
-		transform: translateX(-50%);
+		align-items: flex-start;
+		justify-content: space-between;
+		gap: 16px;
+		padding: 10px 11px;
+		border: 1px solid var(--stage-ink);
+		background: var(--paper);
+		color: var(--ink);
+		font-family: var(--mono);
+		font-size: 8px;
+		line-height: 1.5;
+		text-transform: uppercase;
+	}
+	.error b {
+		font-weight: 500;
 	}
 	.error button {
 		border: 0;
 		background: transparent;
-		color: #f0c6bc;
+		color: var(--ink);
 		font-size: 16px;
-		line-height: 1;
+		line-height: 0.8;
 	}
 
-	@media (max-width: 860px) {
+	@media (max-width: 1180px) {
+		.mast-meta {
+			display: none;
+		}
+	}
+
+	@media (max-width: 900px) {
+		.frame {
+			height: auto;
+			min-height: calc(100dvh - 16px);
+			margin: 8px;
+		}
+		.masthead {
+			flex-wrap: wrap;
+			min-height: 48px;
+		}
+		.brand {
+			padding: 0 12px;
+			min-height: 48px;
+		}
+		.brand-name {
+			font-size: 20px;
+		}
+		.brand-sub {
+			display: none;
+		}
+		.mast-stats {
+			margin-left: auto;
+		}
+		.mast-stats span {
+			padding: 0 9px;
+			font-size: 7px;
+		}
+		.look button {
+			padding: 0 8px;
+			font-size: 7px;
+		}
 		.app {
-			grid-template-columns: 1fr;
-			grid-template-rows: 52dvh 48dvh;
+			display: flex;
+			flex-direction: column;
+			overflow: visible;
 		}
 		.stage {
 			order: 1;
+			height: 58dvh;
+			min-height: 330px;
+			max-height: 620px;
+			border-bottom: 1px solid var(--ink);
 		}
 		.panel {
 			order: 2;
 			height: auto;
+			overflow: visible;
+			padding: 0 14px 26px;
 			border-right: 0;
-			border-top: 1px solid var(--line);
-			padding: 20px 20px 18px;
 		}
-		.masthead {
-			padding-bottom: 16px;
+		.panel-head {
+			padding-top: 16px;
 		}
-		.wordmark {
-			font-size: 30px;
+		.panel-title {
+			font-size: 34px;
 		}
-		.presets {
-			grid-template-columns: repeat(5, 1fr);
+		.panel-eyebrow {
+			margin-bottom: 22px;
+		}
+		.presets button {
+			padding: 8px 7px;
+		}
+		.stage-line {
+			left: 22px;
+			right: 22px;
+			font-size: 7px;
 		}
 		.drop {
-			inset: 12px;
+			width: calc(100% - 36px);
+			padding: 13px;
+			gap: 18px;
 		}
 		.drop-title {
-			font-size: clamp(28px, 9vw, 44px);
+			font-size: clamp(34px, 9vw, 52px);
 		}
-		.drop-sub {
-			font-size: 8px;
+	}
+
+	@media (max-width: 560px) {
+		.mast-stats span:nth-child(2) {
+			display: none;
+		}
+		.panel-title {
+			font-size: 31px;
+		}
+		.stage-line-bottom span:last-child {
+			display: none;
+		}
+		.ticks {
+			inset: 8px;
+		}
+		.stage-line-top {
+			top: 15px;
+		}
+		.stage-line-bottom {
+			bottom: 15px;
+		}
+	}
+
+	@media (max-width: 430px) {
+		.mast-stats span:nth-child(3) {
+			display: none;
+		}
+		.look button {
+			padding: 0 7px;
+		}
+		.brand {
+			padding: 0 10px;
 		}
 	}
 </style>
