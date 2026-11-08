@@ -139,6 +139,10 @@ export class GpuSimulation {
 			uFractureScale: { value: 6 },
 			uFractureSpread: { value: 0.5 },
 			uDepthStrength: { value: 0 },
+			uAudioBass: { value: 0 },
+			uAudioMid: { value: 0 },
+			uAudioTreble: { value: 0 },
+			uAudioAmp: { value: 0 },
 			uAssembly: { value: 0 }
 		};
 
@@ -242,6 +246,10 @@ export class GpuSimulation {
 		u.uFractureSpread.value = params.fractureSpread;
 
 		u.uDepthStrength.value = params.depthEnabled ? params.depthStrength * modulation.depth : 0;
+		u.uAudioBass.value = Math.max(0, Math.min(2, audio.bass));
+		u.uAudioMid.value = Math.max(0, Math.min(2, audio.mid));
+		u.uAudioTreble.value = Math.max(0, Math.min(2, audio.treble));
+		u.uAudioAmp.value = Math.max(0, Math.min(2, audio.amp));
 		u.uAssembly.value = assembly;
 
 		u.uPositions.value = this.positions[this.read].texture;

@@ -2,7 +2,7 @@
 
 An image dissolves into 200,000 GPU particles and reassembles. Fine dots on black, slow incompressible drift, a loose spring home, and a two-stop colour grade that keeps portraits coherent on a dark stage.
 
-Phase 1 is a complete, runnable WebGL piece: image decomposition → importance sampling → GPU particle simulation → additive point renderer → Svelte control panel. Audio is deliberately phase 2, but the seam for it already exists.
+Phase 1 is a complete, runnable WebGL piece: image decomposition → importance sampling → GPU particle simulation → additive point renderer → Svelte control panel. Phase 2 adds the audio path: a local track is analysed with an `AnalyserNode`, and its spectrum drives the same force field as plain numbers.
 
 ---
 
@@ -51,9 +51,10 @@ Requirements: a browser with WebGL2 and render-to-float support (`EXT_color_buff
 ### Using it
 
 - Drop a JPG/PNG/WebP anywhere on the stage, or click **Replace image**.
+- Drop an audio file on the stage, or open **Audio** and click **Choose audio**. Press **Play**; the spectrum draws in the section and pushes the particles. The file is decoded locally and never uploaded.
 - Pick a preset: **Drift**, **Ash**, **Undertow**, **Shatter**, **Still**.
 - **Reassemble** (`R`) pulls the cloud home, then releases it.
-- **Pulse** (`Space`) fires a radial impulse. **Auto pulse** is a metronome standing in for live audio until phase 2.
+- **Pulse** (`Space`) fires a radial impulse. **Auto pulse** is a metronome for when no audio is playing; live bass onsets also feed the same `beat` envelope.
 - Move the pointer over the stage to attract, repel, or swirl.
 - Choose a **Grade** — Auto, Source, Bone, Ember, Ice or Rose — and set amount/chroma. Grading is a live shader uniform; it never resamples.
 - Open **Modulation** to run four LFOs. Each route has a target, shape, rate, depth, on/off and a retrigger button (`↻`).
@@ -89,7 +90,7 @@ SampledParticles ── origins (x,y,z,mass) · colors · sizes · seeds
                                                                      │
 Svelte panel ── plain SimParams snapshot ──► uniforms ──────────────┘
 
-phase 2: AnalyserNode ── AudioFrame { bass, mid, treble, amp, beat } ──► uniforms
+phase 2: uploaded audio ─► AnalyserNode ─► AudioFrame { bass, mid, treble, amp, beat } ─► uniforms
 ```
 
 The important boundary: **Svelte never touches the animation loop, and the animation loop never reads Svelte state.** The UI owns a reactive `SimParams`; on a control change it hands a plain `$state.snapshot(params)` object to `ParticleField`. The loop reads that ordinary object and writes uniforms. No per-frame framework reactivity, no per-particle JavaScript.
@@ -112,9 +113,10 @@ src/
     gpu/shaders/noise.ts  3D simplex noise, hashes, divergence-free curl
     gpu/shaders/render.ts  point vertex/fragment shaders + palette grade
     gpu/view.ts            Three.js renderer, geometry, letterbox fit, DPR cap
-    gpu/field.ts           loop, pointer, beat, LFO runtime, stats
-    audio/types.ts         AudioFrame seam for phase 2
-    ui/*.svelte            Section, Slider, Toggle
+    gpu/field.ts           loop, pointer, beat, audio, LFO runtime, stats
+    audio/types.ts         AudioFrame { bass, mid, treble, amp, beat }
+    audio/engine.ts        element → AnalyserNode, bands, onset beat, routing
+    ui/*.svelte            Section, Slider, Toggle, AudioScope
 ```
 
 Browser cleanup is returned from `onMount` (`removeEventListener`, `dispose()`), not `onDestroy`. There is no `onDestroy` in the project.
@@ -231,7 +233,7 @@ a += (d̂ · strength + perp(d̂) · swirl) · falloff · 0.40 · (1 − assembl
 a += x̂ · b · strength · r²/(|x|² + r²) · 0.75 · (1 − assembly)
 ```
 
-with an extra seed-based z kick. The falloff makes the impulse strongest at the centre and gentle at the edges. In phase 2, `beat` will be driven by an onset detector instead of the button/metronome, without changing this shader.
+with an extra seed-based z kick. The falloff makes the impulse strongest at the centre and gentle at the edges. Pressing Space, clicking Pulse and a detected bass onset all raise the same envelope; the tick loop owns its decay.
 
 ### 5. Traveling ring
 
@@ -278,7 +280,21 @@ The z channel is a 2.5D cue, not a physical camera:
 
 Depth therefore reads as a shimmer of slightly shifting, growing, brightening grains. A perspective camera and depth sorting would cost far more and would fight additive blending.
 
-### 8. Rendering
+### 8. Spectral forces
+
+Audio enters the same acceleration buffer as every other force. The four band uniforms are plain numbers in 0..2:
+
+```
+bass    radial bloom + z scatter near the centre
+mid     curl strength × (1 + 1.15·mid), wave strength × (1 + 0.9·mid)
+treble  fast xy jitter + z chatter
+amp     slow curl turbulence; also raises point size and opacity
+beat    the existing radial pulse envelope
+```
+
+Bass is weighted by `1/(1 + 1.6|x|)`, so the bloom reads as a breath from the middle rather than a uniform push. Mid does not add a force of its own; it multiplies the curl and ring forces that already exist, which keeps the image's structure instead of smearing it. Treble is the only band that injects per-particle randomness. Amp is deliberately slow: it is the mix level, not a transient. If a band is switched off or Amount is 0, its uniform is exactly 0 and the shader branch is skipped.
+
+### 9. Rendering
 
 One `THREE.Points` draw, additive blending, no depth test/write. The vertex shader samples the position texture at `aRef` (the particle's texel center), applies the letterbox fit, and sets `gl_PointSize` with size, DPR, depth, and a slow twinkle. The fragment shader discards outside a circle and uses `smoothstep` for a soft edge, then converts linear RGB to sRGB explicitly. Output color space is sRGB; DPR is capped at 1.5 to keep fill rate sane on Retina displays.
 
@@ -299,6 +315,28 @@ colour = mix(src, graded, amount)
 `lo`/`hi` are the linearised 15th/85th luminance percentiles. `amount` is 0 in **Source** mode; otherwise the user controls it. The presets are **Bone** (warm ivory), **Ember** (burnt orange), **Ice** (pale cyan) and **Rose** (pink), plus **Auto**. Auto takes the dominant saturated hue, builds a near-black tinted shadow `hsl(h, 0.62, 0.055)` and a desaturated highlight `hsl(h + 0.025, 0.24, 0.88)`, and nudges green hues toward teal. If mean saturation is below 0.07 the source is treated as black-and-white and Auto falls back to Bone. The source palette swatches remain metadata for the UI; the grade is per particle.
 
 Why not leave the source alone? Additive blending on black accumulates quickly: a multicolour image turns into clashing neon, and a pure white grade loses the midtones that carry a face. A dark→light duotone keeps the luminance structure but puts every particle in one coherent colour family. Because the operation lives in the point vertex shader, mode/amount/chroma are live uniforms and never trigger a resample.
+
+---
+
+## Audio reactive
+
+The audio path is one `HTMLAudioElement` fed through `MediaElementAudioSourceNode → AnalyserNode → destination`. The analyser uses FFT 2048, smoothing 0.72, and −90/−10 dB limits. A metering `requestAnimationFrame` runs only while the track plays; on pause, end, replace or dispose it stops and sends one silent frame so the field settles immediately.
+
+```
+bass    RMS 20–160 Hz
+mid     RMS 160–2 000 Hz
+treble  RMS 2 000–12 000 Hz
+amp     RMS 20–16 000 Hz
+beat    bass − running average, thresholded and normalised
+```
+
+Band values are RMS of the analyser bins, so a narrow tone does not look as loud as wide noise. The running average (`α = 0.06`) turns bass into a transient detector: a positive delta above 0.1 while bass is above 0.16 becomes a `beat` peak. That peak merges with the manual Space/Pulse kick; the simulation owns the decay.
+
+**Routing is plain state.** The section's _Amount_ (0..2), the three band switches and _Audio reactive_ are copied into `AudioEngine.routing` by a Svelte effect. The metering loop reads that object, multiplies the bands, and hands a plain `AudioFrame` to `ParticleField.setAudio()`. The animation loop never reads Svelte state and the page never receives per-frame updates; only the transport clock (4 Hz `timeupdate`) and the small spectrum canvas have their own clocks.
+
+`src/lib/ui/AudioScope.svelte` draws log-spaced bars from `engine.spectrum` with hairline dividers at 160 Hz and 2 kHz, labelled **Bass / Mid / Treble** below. It re-reads `--ink`/`--line` when the look changes, like the rest of the instrument.
+
+Uploads stay local: the track is decoded from an object URL, never sent anywhere, and the URL is revoked when the track is replaced or the page unmounts. Microphone input and streaming services are not wired yet; both can reuse the same `AudioFrame` seam.
 
 ---
 
@@ -339,6 +377,7 @@ Presets reset the look but keep the user's **seed**, **particle count**, **palet
 
 - Simulation cost is two fullscreen passes over a 448²–512² texture (≈ 200k–262k fragments each), regardless of point count. The expensive per-fragment work is the 6-sample curl and the 9-cell fracture search; both are branch-skipped when their strength is zero.
 - The only per-frame JavaScript is: read `dt`, decay the beat envelope, advance assembly/auto-pulse, advance four LFO phases and multiply ten factors, set ~40 uniforms, call two `renderer.render` calls plus the point draw. Our loop walks no arrays and allocates nothing; the LFO random tables are built once and Three.js keeps its own internal state.
+- While audio plays, one extra `requestAnimationFrame` reads the analyser (`getByteFrequencyData`, 1024 bins), averages four bands, and writes five numbers into the field. It allocates nothing per frame; when the track pauses it stops and sends one silent frame. The spectrum canvas also runs on its own rAF, reading the same byte array.
 - Resampling (CDF + geometry rebuild) is the one main-thread spike and happens only on image change, preset change, seed change, or release of Count/Edge detail. Measured here: ≈ 63 ms at 200k and ≈ 92 ms at 262k for the sampling + geometry work (image analysis is a separate one-time pass on upload). The UI paints a loading state before that work starts.
 - Geometry memory at 200k: positions 2.4 MB, refs 1.6 MB, colors 2.4 MB, sizes/seeds 1.6 MB, plus ~25 MB of float render targets. 512² adds ~13 MB. Fine for a desktop tab.
 - On lower-end GPUs, drop Count to 65k–98k and/or close other GPU tabs. The visual language survives at lower counts; only the finest grain is lost.
@@ -347,9 +386,11 @@ Presets reset the look but keep the user's **seed**, **particle count**, **palet
 
 ## Phase plan
 
-**Phase 1 — done (this repo).** GPU foundation, image decomposition, CDF sampling, renderer, UI, presets, pointer, beat placeholder, performance instrumentation. `npm run check` is clean; `npm run build` produces a static site.
+**Phase 1 — done.** GPU foundation, image decomposition, CDF sampling, renderer, UI, presets, pointer, beat placeholder, performance instrumentation. `npm run check` is clean; `npm run build` produces a static site.
 
-**Phase 2 — audio.** Add a Web Audio graph (`AudioContext` → `AnalyserNode`, FFT 2048) for microphone and uploaded audio. Map log-spaced bands to `bass`/`mid`/`treble`/`amp` with smoothing and noise floors. Detect onsets with spectral flux plus an adaptive median threshold, then feed a decaying `beat` envelope. Route bands into forces as plain numbers: bass → pulse/fracture, mid → curl strength, treble → point size/twinkle, amp → global gain. Add input selection, gain, and three per-band influence sliders. The GLSL does not change: it already receives an `AudioFrame`; phase 1 fills it with silence plus the button/metronome beat.
+**Phase 1.5 — modulation + audio (this branch).** Animated LFO waveform scopes, and an audio path that decodes a local file, analyses it with a Web Audio `AnalyserNode`, and routes four spectral bands into the existing forces as plain numbers. Onsets raise the same `beat` envelope the Space/Pulse kick uses. Microphone input, gain trim, per-band influence and a spectral-flux onset detector are still open; the `AudioFrame` seam does not change for them.
+
+**Phase 2 — streaming and microphone.** Add input selection beside the upload path: microphone capture and, later, streaming-service playback. Both feed the same `AudioEngine` seam, so the field does not learn where the sound came from.
 
 **Phase 3 — polish and editioning.** URL-encoded presets and seeds, PNG/WebM export, still-frame capture at 2× DPR, keyboard-focusable canvas controls, reduced-motion behavior, and a mobile-specific layout pass. Optional: image sequences or short video as the source.
 
@@ -372,7 +413,7 @@ The new runtime keeps all particle state in float textures, runs exactly two fra
 
 ## Known limits and honest notes
 
-- **No live audio yet.** The beat button/metronome is a stand-in; the seam and typing exist for phase 2. Do not describe phase 1 as audio-reactive.
+- **Audio is upload-only.** The track is decoded locally from an object URL; there is no microphone or streaming input yet. Cross-origin streams would additionally need CORS-safe media and a user gesture to resume the `AudioContext`.
 - **Approximate Voronoi.** A 3×3 jittered-grid force, not exact cell clipping. Cheap and convincing at this density; not mathematically exact.
 - **Additive highlights can still clip** on very bright images. Defaults (size 1.2, opacity 0.65, Grade amount 0.85) were tuned against a bright 900×1200 test portrait; the sliders and the pre-highlight endpoint of the grade let you recover detail or lean into glow.
 - **The grade is a treatment, not a reconstruction.** Auto follows the dominant hue; a heavily mixed image will be unified to one family, which is the point. Switch to Source if you want the literal photograph.

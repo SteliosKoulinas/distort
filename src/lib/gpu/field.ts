@@ -173,6 +173,19 @@ export class ParticleField {
 		this.audio.beat = Math.max(this.audio.beat, strength);
 	}
 
+	/**
+	 * Copy a plain spectral frame into the field. Called from the audio
+	 * engine's metering clock. Beat peaks merge with manual kicks; the tick
+	 * loop owns the decay.
+	 */
+	setAudio(frame: AudioFrame): void {
+		this.audio.bass = frame.bass;
+		this.audio.mid = frame.mid;
+		this.audio.treble = frame.treble;
+		this.audio.amp = frame.amp;
+		this.audio.beat = Math.max(this.audio.beat, frame.beat);
+	}
+
 	/** A temporary strong spring pulls the cloud home, then releases it. */
 	reassemble(): void {
 		this.assemblyHold = 2;
@@ -322,7 +335,7 @@ export class ParticleField {
 					this.audio,
 					this.assembly
 				);
-				this.view.render(this.sim.positionTexture, this.time, this.modulation);
+				this.view.render(this.sim.positionTexture, this.time, this.modulation, this.audio);
 			}
 		} catch (error) {
 			this.stop();

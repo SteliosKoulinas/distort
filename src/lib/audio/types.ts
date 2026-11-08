@@ -3,7 +3,7 @@ export interface AudioFrame {
 	mid: number;
 	treble: number;
 	amp: number;
-	/** 0..1 transient envelope. Phase 1 fills this from the Kick button. */
+	/** 0..1 transient envelope. Integrated with the Kick button by the field. */
 	beat: number;
 }
 

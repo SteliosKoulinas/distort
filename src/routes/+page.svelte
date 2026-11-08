@@ -21,11 +21,19 @@
 	import Section from '#lib/ui/Section.svelte';
 	import Slider from '#lib/ui/Slider.svelte';
 	import Toggle from '#lib/ui/Toggle.svelte';
+	import AudioScope from '#lib/ui/AudioScope.svelte';
+	import { AudioEngine } from '#lib/audio/engine';
 
 	let canvasEl: HTMLCanvasElement;
 	let stageEl: HTMLElement;
 	let fileEl: HTMLInputElement;
+	let audioEl: HTMLInputElement;
 	let field: ParticleField | null = null;
+
+	// Plain references for the canvas scopes. They poll these objects from
+	// their own animation frames, outside Svelte reactivity.
+	let audioEngine: AudioEngine | null = null;
+	const audioSource: { engine: AudioEngine | null } = { engine: null };
 
 	let params = $state<SimParams>(createDefaultParams());
 	let analysis = $state<ImageAnalysis | null>(null);
@@ -38,6 +46,18 @@
 	let activePreset = $state<PresetId | 'custom'>('drift');
 	let clock = $state('--:--');
 	let look = $state<'light' | 'dark'>('light');
+
+	let audioName = $state('');
+	let audioDuration = $state(0);
+	let audioTime = $state(0);
+	let audioLoaded = $state(false);
+	let audioLoading = $state(false);
+	let audioPlaying = $state(false);
+	let audioReactive = $state(true);
+	let audioAmount = $state(1);
+	let audioBass = $state(true);
+	let audioMid = $state(true);
+	let audioTreble = $state(true);
 
 	function setLook(next: 'light' | 'dark') {
 		look = next;
@@ -69,6 +89,31 @@
 	const fmtHz = (value: number) => `${value.toFixed(2)} Hz`;
 	const fmtSigned = (value: number) => `${value > 0 ? '+' : ''}${value.toFixed(1)}`;
 	const fmtCount = (value: number) => Math.round(value).toLocaleString('en-US');
+
+	function fmtTime(seconds: number): string {
+		if (!Number.isFinite(seconds) || seconds <= 0) return '0:00';
+		const whole = Math.floor(seconds);
+		return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`;
+	}
+
+	function isAudioFile(file: File): boolean {
+		return (
+			file.type.startsWith('audio/') ||
+			/\.(mp3|m4a|aac|wav|ogg|oga|opus|flac|webm)$/i.test(file.name)
+		);
+	}
+
+	/**
+	 * The engine owns the plain routing object. Copying the reactive UI state
+	 * into it keeps per-frame frames free of Svelte reads.
+	 */
+	function applyAudioRouting() {
+		if (!audioEngine) return;
+		audioEngine.routing.amount = audioReactive ? audioAmount : 0;
+		audioEngine.routing.bass = audioBass;
+		audioEngine.routing.mid = audioMid;
+		audioEngine.routing.treble = audioTreble;
+	}
 
 	let hudCount = $derived(
 		stats
@@ -115,6 +160,22 @@
 		field = instance;
 		instance.setParams($state.snapshot(params));
 
+		// Audio is created after the field so its metering clock can hand
+		// plain spectral frames straight to the simulation.
+		const engine = new AudioEngine();
+		engine.setFrameSink((frame) => instance.setAudio(frame));
+		engine.onTime = (time, duration) => {
+			audioTime = time;
+			audioDuration = duration;
+		};
+		engine.onEnded = () => {
+			audioPlaying = false;
+			audioTime = audioDuration;
+		};
+		audioEngine = engine;
+		audioSource.engine = engine;
+		applyAudioRouting();
+
 		const onKeyDown = (event: KeyboardEvent) => {
 			const target = event.target as HTMLElement | null;
 			if (
@@ -142,6 +203,9 @@
 		return () => {
 			window.clearInterval(clockTimer);
 			window.removeEventListener('keydown', onKeyDown);
+			audioSource.engine = null;
+			audioEngine?.dispose();
+			audioEngine = null;
 			instance.dispose();
 			field = null;
 			if (thumbUrl) URL.revokeObjectURL(thumbUrl);
@@ -153,6 +217,23 @@
 	$effect(() => {
 		const snapshot = $state.snapshot(params);
 		if (field) field.setParams(snapshot);
+	});
+
+	// Same idea for audio: the reactive controls are copied into the engine's
+	// plain routing object, which its metering clock reads per frame.
+	$effect(() => {
+		const routing = {
+			amount: audioReactive ? audioAmount : 0,
+			bass: audioBass,
+			mid: audioMid,
+			treble: audioTreble
+		};
+		const engine = audioEngine;
+		if (!engine) return;
+		engine.routing.amount = routing.amount;
+		engine.routing.bass = routing.bass;
+		engine.routing.mid = routing.mid;
+		engine.routing.treble = routing.treble;
 	});
 
 	async function loadFile(file: File) {
@@ -196,6 +277,75 @@
 		const file = input.files?.[0];
 		input.value = '';
 		if (file) void loadFile(file);
+	}
+
+	async function loadAudioFile(file: File) {
+		errorMessage = '';
+
+		if (!isAudioFile(file)) {
+			errorMessage = 'That file is not audio. Try MP3, M4A, WAV or OGG.';
+			return;
+		}
+		const engine = audioEngine;
+		if (!engine) {
+			errorMessage = 'The audio engine is not ready yet. Try again in a moment.';
+			return;
+		}
+
+		audioLoading = true;
+		try {
+			const track = await engine.load(file);
+			audioName = track.name;
+			audioDuration = track.duration;
+			audioTime = 0;
+			audioLoaded = true;
+			audioPlaying = false;
+		} catch (error) {
+			audioName = '';
+			audioDuration = 0;
+			audioTime = 0;
+			audioLoaded = false;
+			audioPlaying = false;
+			errorMessage = error instanceof Error ? error.message : 'Could not read that audio.';
+		} finally {
+			audioLoading = false;
+		}
+	}
+
+	function onAudioChange(event: Event) {
+		const input = event.currentTarget as HTMLInputElement;
+		const file = input.files?.[0];
+		input.value = '';
+		if (file) void loadAudioFile(file);
+	}
+
+	async function toggleAudio() {
+		const engine = audioEngine;
+		if (!engine || !audioLoaded || audioLoading) return;
+
+		errorMessage = '';
+		if (engine.isPlaying) {
+			engine.pause();
+			audioPlaying = false;
+			audioTime = engine.currentTime;
+			return;
+		}
+
+		try {
+			await engine.play();
+			audioPlaying = true;
+		} catch {
+			audioPlaying = false;
+			errorMessage = 'Playback could not start. Click Play again.';
+		}
+	}
+
+	function seekAudio(event: Event) {
+		const input = event.currentTarget as HTMLInputElement;
+		const next = Number(input.value);
+		if (!Number.isFinite(next)) return;
+		audioEngine?.seek(next);
+		audioTime = next;
 	}
 
 	function resampleNow() {
@@ -255,7 +405,9 @@
 		event.preventDefault();
 		dragActive = false;
 		const file = event.dataTransfer?.files?.[0];
-		if (file) void loadFile(file);
+		if (!file) return;
+		if (isAudioFile(file)) void loadAudioFile(file);
+		else void loadFile(file);
 	}
 </script>
 
@@ -276,6 +428,15 @@
 	aria-label="Choose an image"
 />
 
+<input
+	bind:this={audioEl}
+	class="hidden-input"
+	type="file"
+	accept="audio/*"
+	onchange={onAudioChange}
+	aria-label="Choose audio"
+/>
+
 <div class="frame">
 	<header class="masthead">
 		<div class="brand">
@@ -284,7 +445,7 @@
 		</div>
 		<div class="mast-meta" aria-hidden="true">
 			<span>Image → particle field</span>
-			<span>Phase 01 / 02</span>
+			<span>Phase 02 / 02</span>
 		</div>
 		<div class="mast-stats">
 			<span>{stats ? `${stats.fps.toFixed(0)} fps` : '— fps'}</span>
@@ -426,7 +587,102 @@
 				{/if}
 			</Section>
 
-			<Section title="Presets" kicker="02" open={true}>
+			<Section title="Audio" kicker="02" open={true}>
+				<button class="upload" onclick={() => audioEl.click()} type="button">
+					<span>{audioLoaded ? 'Replace audio' : 'Choose audio'}</span>
+					<span class="upload-plus" aria-hidden="true">{audioLoaded ? '↺' : '+'}</span>
+				</button>
+
+				{#if audioLoaded}
+					<div class="audio-meta">
+						<span class="filename" title={audioName}>{audioName}</span>
+						<span class="dims">{fmtTime(audioDuration)}</span>
+					</div>
+
+					<div class="audio-transport">
+						<button
+							type="button"
+							onclick={toggleAudio}
+							aria-label={audioPlaying ? 'Pause audio' : 'Play audio'}
+						>
+							<span>{audioPlaying ? 'Pause' : 'Play'}</span>
+							<span aria-hidden="true">{audioPlaying ? '❚❚' : '▶'}</span>
+						</button>
+						<span class="audio-time">{fmtTime(audioTime)} / {fmtTime(audioDuration)}</span>
+					</div>
+
+					<label class="audio-seek">
+						<input
+							type="range"
+							min="0"
+							max={Math.max(0.01, audioDuration)}
+							step="0.01"
+							value={audioTime}
+							oninput={seekAudio}
+							aria-label="Seek audio"
+						/>
+					</label>
+				{:else}
+					<p class="empty-copy">
+						Add a track and let its spectrum move the particles. The file is decoded locally; it is
+						never uploaded.
+					</p>
+				{/if}
+
+				{#if audioLoading}<p class="audio-loading">Reading audio…</p>{/if}
+
+				<AudioScope source={audioSource} />
+
+				<div class="audio-axis" aria-hidden="true">
+					<span>Bass · 20–160</span>
+					<span>Mid · 160–2k</span>
+					<span>Treble · 2k–12k</span>
+				</div>
+
+				<Toggle
+					label="Audio reactive"
+					bind:checked={audioReactive}
+					hint="Spectral bands push the particles."
+				/>
+				<Slider
+					label="Amount"
+					bind:value={audioAmount}
+					min={0}
+					max={2}
+					step={0.01}
+					format={fmt2}
+					hint="Master depth of every band. The image is unchanged at 0."
+				/>
+
+				<div class="audio-toggle" role="group" aria-label="Spectral bands">
+					<button
+						type="button"
+						class:active={audioBass}
+						aria-pressed={audioBass}
+						onclick={() => (audioBass = !audioBass)}
+					>
+						Bass
+					</button>
+					<button
+						type="button"
+						class:active={audioMid}
+						aria-pressed={audioMid}
+						onclick={() => (audioMid = !audioMid)}
+					>
+						Mid
+					</button>
+					<button
+						type="button"
+						class:active={audioTreble}
+						aria-pressed={audioTreble}
+						onclick={() => (audioTreble = !audioTreble)}
+					>
+						Treble
+					</button>
+				</div>
+			</Section>
+
+			<Section title="Presets" kicker="03" open={true}>
 				<div class="presets">
 					{#each PRESETS as preset, index}
 						<button
@@ -473,7 +729,7 @@
 				<button class="ghost" type="button" onclick={randomize}>Randomize look</button>
 			</Section>
 
-			<Section title="Particles" kicker="03" open={true}>
+			<Section title="Particles" kicker="04" open={true}>
 				<Slider
 					label="Count"
 					bind:value={params.particleCount}
@@ -502,7 +758,7 @@
 				/>
 			</Section>
 
-			<Section title="Flow field" kicker="04" open={true}>
+			<Section title="Flow field" kicker="05" open={true}>
 				<Toggle label="Curl noise" bind:checked={params.curlEnabled} />
 				<Slider
 					label="Strength"
@@ -530,7 +786,7 @@
 				/>
 			</Section>
 
-			<Section title="Return" kicker="05">
+			<Section title="Return" kicker="06">
 				<Toggle label="Spring to origin" bind:checked={params.springEnabled} />
 				<Slider
 					label="Stiffness"
@@ -558,7 +814,7 @@
 				/>
 			</Section>
 
-			<Section title="Pointer" kicker="06">
+			<Section title="Pointer" kicker="07">
 				<Toggle label="Pointer force" bind:checked={params.pointerEnabled} />
 				<Slider
 					label="Attract / repel"
@@ -587,12 +843,12 @@
 				/>
 			</Section>
 
-			<Section title="Pulse" kicker="07">
+			<Section title="Pulse" kicker="08">
 				<Toggle label="Radial pulse" bind:checked={params.pulseEnabled} />
 				<Toggle
 					label="Auto pulse"
 					bind:checked={params.autoPulse}
-					hint="A metronome in place of live audio. Phase 2 replaces it."
+					hint="A metronome when no audio is playing."
 				/>
 				<Slider
 					label="Strength"
@@ -612,7 +868,7 @@
 				/>
 			</Section>
 
-			<Section title="Wave" kicker="08">
+			<Section title="Wave" kicker="09">
 				<Toggle label="Traveling ring" bind:checked={params.waveEnabled} />
 				<Slider
 					label="Strength"
@@ -640,7 +896,7 @@
 				/>
 			</Section>
 
-			<Section title="Fracture" kicker="09">
+			<Section title="Fracture" kicker="10">
 				<Toggle
 					label="Voronoi shards"
 					bind:checked={params.fractureEnabled}
@@ -672,7 +928,7 @@
 				/>
 			</Section>
 
-			<Section title="Depth" kicker="10">
+			<Section title="Depth" kicker="11">
 				<Toggle
 					label="Depth scatter"
 					bind:checked={params.depthEnabled}
@@ -688,7 +944,7 @@
 				/>
 			</Section>
 
-			<Section title="Modulation" kicker="11" open={false}>
+			<Section title="Modulation" kicker="12" open={false}>
 				<div class="lfo-head">
 					<span>4 routes · retrigger</span>
 					<button type="button" class="mini-button" onclick={triggerAllLfos}>Trigger all</button>
@@ -1090,6 +1346,146 @@
 		flex: 0 0 auto;
 		font-family: var(--mono);
 		font-size: 8px;
+		color: var(--muted);
+	}
+
+	.audio-meta {
+		display: flex;
+		justify-content: space-between;
+		gap: 12px;
+		margin-top: 8px;
+		padding: 6px 8px;
+		border: 1px solid var(--ink);
+	}
+	.audio-transport {
+		display: flex;
+		align-items: stretch;
+		justify-content: space-between;
+		margin-top: 6px;
+		border: 1px solid var(--ink);
+	}
+	.audio-transport button {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+		padding: 8px 10px;
+		border: 0;
+		background: transparent;
+		color: var(--ink);
+		font-family: var(--mono);
+		font-size: 8px;
+		letter-spacing: 0.02em;
+		text-transform: uppercase;
+		transition:
+			background 120ms ease,
+			color 120ms ease;
+	}
+	.audio-transport button:hover {
+		background: var(--ink);
+		color: var(--paper);
+	}
+	.audio-transport button span:last-child {
+		font-size: 9px;
+		line-height: 1;
+	}
+	.audio-time {
+		display: flex;
+		align-items: center;
+		padding: 0 10px;
+		border-left: 1px solid var(--ink);
+		font-family: var(--mono);
+		font-size: 8px;
+		font-variant-numeric: tabular-nums;
+		color: var(--muted);
+	}
+	.audio-seek {
+		display: block;
+		margin: 2px 0 0;
+	}
+	.audio-seek input[type='range'] {
+		-webkit-appearance: none;
+		appearance: none;
+		display: block;
+		width: 100%;
+		height: 16px;
+		margin: 0;
+		background: transparent;
+		cursor: ew-resize;
+	}
+	.audio-seek input[type='range']::-webkit-slider-runnable-track {
+		height: 1px;
+		background: var(--line-strong);
+	}
+	.audio-seek input[type='range']::-webkit-slider-thumb {
+		-webkit-appearance: none;
+		width: 7px;
+		height: 7px;
+		margin-top: -3px;
+		border: 0;
+		border-radius: 0;
+		background: var(--ink);
+	}
+	.audio-seek input[type='range']::-moz-range-track {
+		height: 1px;
+		background: var(--line-strong);
+	}
+	.audio-seek input[type='range']::-moz-range-thumb {
+		width: 7px;
+		height: 7px;
+		border: 0;
+		border-radius: 0;
+		background: var(--ink);
+	}
+	.audio-axis {
+		display: grid;
+		grid-template-columns: 28% 42% 30%;
+		margin: 4px 0 10px;
+		font-family: var(--mono);
+		font-size: 7px;
+		letter-spacing: 0.02em;
+		text-transform: uppercase;
+		color: var(--muted);
+	}
+	.audio-axis span:nth-child(2) {
+		text-align: center;
+	}
+	.audio-axis span:last-child {
+		text-align: right;
+	}
+	.audio-toggle {
+		display: grid;
+		grid-template-columns: repeat(3, 1fr);
+		border: 1px solid var(--ink);
+	}
+	.audio-toggle button {
+		padding: 6px 0;
+		border: 0;
+		background: transparent;
+		color: var(--muted);
+		font-family: var(--mono);
+		font-size: 7px;
+		letter-spacing: 0.03em;
+		text-transform: uppercase;
+		transition:
+			background 120ms ease,
+			color 120ms ease;
+	}
+	.audio-toggle button + button {
+		border-left: 1px solid var(--line-strong);
+	}
+	.audio-toggle button:hover {
+		color: var(--ink);
+	}
+	.audio-toggle button.active {
+		background: var(--ink);
+		color: var(--paper);
+	}
+	.audio-loading {
+		margin: 6px 0 0;
+		font-family: var(--mono);
+		font-size: 8px;
+		letter-spacing: 0.02em;
+		text-transform: uppercase;
 		color: var(--muted);
 	}
 
@@ -1641,7 +2037,7 @@
 	}
 
 	.stage.dragging::after {
-		content: 'Release to sample';
+		content: 'Release to load';
 		position: absolute;
 		top: 50%;
 		left: 50%;
