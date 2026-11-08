@@ -1,5 +1,6 @@
-import type { SimParams, LfoShape, Modulation } from '#lib/core/params';
+import type { SimParams, Modulation } from '#lib/core/params';
 import { neutralModulation } from '#lib/core/params';
+import { LFO_SLOTS, createRandomTable, lfoSignal } from '#lib/core/lfo';
 import type { AudioFrame } from '#lib/audio/types';
 import { silentAudioFrame } from '#lib/audio/types';
 import type { ImageAnalysis } from '#lib/image/analyze';
@@ -7,7 +8,6 @@ import type { DecodedImage } from '#lib/image/decode';
 import { sampleParticles, type SampledParticles } from '#lib/image/sample';
 import { resolvePalette, paletteLevels } from '#lib/core/palette';
 import { hexToLinearRgb } from '#lib/core/color';
-import { mulberry32 } from '#lib/core/rng';
 import { GpuSimulation, type PointerState } from './simulation';
 import { ParticleView } from './view';
 
@@ -16,6 +16,16 @@ export interface FieldStats {
 	count: number;
 	textureSize: number;
 	precision: 'float32' | 'float16';
+}
+
+/** A plain snapshot for the waveform displays. No Svelte reactivity involved. */
+export interface LfoView {
+	phase: number;
+	/** Raw shape signal in -1..1, before depth or the retrigger envelope. */
+	signal: number;
+	/** Retrigger ramp, 0 at the trigger and 1 once fully open. */
+	env: number;
+	table: Float32Array;
 }
 
 export interface ParticleFieldOptions {
@@ -29,8 +39,6 @@ export interface ParticleFieldOptions {
 type Source = { analysis: ImageAnalysis; image: DecodedImage };
 
 const MAX_COUNT = 512 * 512;
-const LFO_SLOTS = 4;
-const RANDOM_STEPS = 16;
 
 interface LfoRuntime {
 	phase: number;
@@ -38,30 +46,6 @@ interface LfoRuntime {
 	env: number;
 	/** Periodic smooth-random values for the `random` shape. */
 	table: Float32Array;
-}
-
-/**
- * LFO signal in -1..1 for a phase in 0..1. Random is a periodic
- * sample-and-hold with smoothstep interpolation, so it wanders instead of
- * stepping like white noise.
- */
-function lfoSignal(shape: LfoShape, phase: number, table: Float32Array): number {
-	switch (shape) {
-		case 'triangle':
-			return 1 - 4 * Math.abs(phase - 0.5);
-		case 'ramp':
-			return phase * 2 - 1;
-		case 'random': {
-			const x = phase * table.length;
-			const i0 = Math.floor(x) % table.length;
-			const i1 = (i0 + 1) % table.length;
-			const f = x - Math.floor(x);
-			const s = f * f * (3 - 2 * f);
-			return table[i0] * (1 - s) + table[i1] * s;
-		}
-		default:
-			return Math.sin(phase * Math.PI * 2);
-	}
 }
 
 /**
@@ -94,12 +78,11 @@ export class ParticleField {
 	private readonly audio: AudioFrame = silentAudioFrame();
 	private readonly pointer: PointerState = { x: 0, y: 0, active: false };
 	private readonly modulation: Modulation = neutralModulation();
-	private readonly lfoRuntime: LfoRuntime[] = Array.from({ length: LFO_SLOTS }, (_, index) => {
-		const rand = mulberry32(0x9e3779b9 + index * 7919);
-		const table = new Float32Array(RANDOM_STEPS);
-		for (let i = 0; i < RANDOM_STEPS; i++) table[i] = rand() * 2 - 1;
-		return { phase: index * 0.19, env: 1, table };
-	});
+	private readonly lfoRuntime: LfoRuntime[] = Array.from({ length: LFO_SLOTS }, (_, index) => ({
+		phase: index * 0.19,
+		env: 1,
+		table: createRandomTable(index)
+	}));
 	private assembly = 0;
 	private assemblyHold = 0;
 	private autoPulseClock = 0;
@@ -124,12 +107,32 @@ export class ParticleField {
 		this.canvas.addEventListener('pointercancel', this.handlePointerEnd);
 		this.canvas.addEventListener('pointerleave', this.handlePointerEnd);
 		document.addEventListener('visibilitychange', this.handleVisibility);
+
+		// The clock runs even before an image exists, so the modulation
+		// waveforms show the live phase from the moment the page mounts.
+		this.start();
 	}
 
 	setParams(params: SimParams): void {
 		this.params = params;
 		this.view.setParams(params);
 		this.applyPalette();
+	}
+
+	/**
+	 * Plain LFO state for the waveform displays. Called from their own
+	 * requestAnimationFrame loops; it never writes Svelte state.
+	 */
+	getLfoView(index: number): LfoView | null {
+		const runtime = this.lfoRuntime[index];
+		const lfo = this.params.lfos[index];
+		if (!runtime || !lfo) return null;
+		return {
+			phase: runtime.phase,
+			signal: lfoSignal(lfo.shape, runtime.phase, runtime.table),
+			env: runtime.env,
+			table: runtime.table
+		};
 	}
 
 	/** Restart one LFO from phase 0 with a short ramp-in envelope. */
@@ -157,7 +160,7 @@ export class ParticleField {
 	}
 
 	start(): void {
-		if (this.raf || !this.sim) return;
+		if (this.raf) return;
 		this.lastTime = performance.now();
 		this.statsTime = this.lastTime;
 		this.frameCount = 0;
@@ -336,7 +339,9 @@ export class ParticleField {
 			this.stats.fps = this.frameCount / elapsed;
 			this.frameCount = 0;
 			this.statsTime = now;
-			this.emitStats();
+			// Before an image exists the clock still runs for the LFO scopes,
+			// but the HUD should keep showing its empty state.
+			if (this.sim) this.emitStats();
 		}
 	};
 
@@ -364,7 +369,7 @@ export class ParticleField {
 	private handleVisibility = (): void => {
 		if (document.hidden) {
 			this.stop();
-		} else if (this.sim) {
+		} else {
 			this.start();
 		}
 	};

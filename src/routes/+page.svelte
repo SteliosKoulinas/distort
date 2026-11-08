@@ -21,11 +21,16 @@
 	import Section from '#lib/ui/Section.svelte';
 	import Slider from '#lib/ui/Slider.svelte';
 	import Toggle from '#lib/ui/Toggle.svelte';
+	import LfoScope from '#lib/ui/LfoScope.svelte';
 
 	let canvasEl: HTMLCanvasElement;
 	let stageEl: HTMLElement;
 	let fileEl: HTMLInputElement;
 	let field: ParticleField | null = null;
+
+	// Stable object shared with the waveform canvases. They poll the field from
+	// their own animation frames, so the reference must not be reactive.
+	const scopeSource: { field: ParticleField | null } = { field: null };
 
 	let params = $state<SimParams>(createDefaultParams());
 	let analysis = $state<ImageAnalysis | null>(null);
@@ -113,6 +118,7 @@
 		}
 
 		field = instance;
+		scopeSource.field = instance;
 		instance.setParams($state.snapshot(params));
 
 		const onKeyDown = (event: KeyboardEvent) => {
@@ -142,6 +148,7 @@
 		return () => {
 			window.clearInterval(clockTimer);
 			window.removeEventListener('keydown', onKeyDown);
+			scopeSource.field = null;
 			instance.dispose();
 			field = null;
 			if (thumbUrl) URL.revokeObjectURL(thumbUrl);
@@ -741,6 +748,15 @@
 								{lfo.enabled ? 'on' : 'off'}
 							</button>
 						</div>
+
+						<LfoScope
+							source={scopeSource}
+							index={index}
+							shape={lfo.shape}
+							rate={lfo.rate}
+							depth={lfo.depth}
+							enabled={lfo.enabled}
+						/>
 
 						<div class="lfo-sliders">
 							<label class="mini-slider">

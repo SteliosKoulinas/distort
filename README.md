@@ -56,7 +56,7 @@ Requirements: a browser with WebGL2 and render-to-float support (`EXT_color_buff
 - **Pulse** (`Space`) fires a radial impulse. **Auto pulse** is a metronome standing in for live audio until phase 2.
 - Move the pointer over the stage to attract, repel, or swirl.
 - Choose a **Grade** — Auto, Source, Bone, Ember, Ice or Rose — and set amount/chroma. Grading is a live shader uniform; it never resamples.
-- Open **Modulation** to run four LFOs. Each route has a target, shape, rate, depth, on/off and a retrigger button (`↻`).
+- Open **Modulation** to run four LFOs. Each route has a target, shape, rate, depth, on/off and a retrigger button (`↻`). A small scope draws the selected shape, the depth-scaled wave and a live playhead, so rate and depth are visible while the route runs.
 - **Randomize look** samples a new world; the dice button only changes the seed.
 - Switch the **Look** between Light and Dark in the masthead. It inverts only the paper and ink around the stage; the stage itself stays black, and the choice is remembered in `localStorage`.
 
@@ -101,6 +101,7 @@ src/
     +page.svelte          UI, upload/drop, presets, HUD, onMount cleanup
   lib/
     core/params.ts        SimParams, presets, randomize, LFO settings
+    core/lfo.ts           LFO shapes, signal function, seeded random tables
     core/color.ts         sRGB/linear/hex/HSL helpers
     core/palette.ts       auto + curated two-stop grades, percentile levels
     core/rng.ts           mulberry32 + seed helpers
@@ -114,7 +115,7 @@ src/
     gpu/view.ts            Three.js renderer, geometry, letterbox fit, DPR cap
     gpu/field.ts           loop, pointer, beat, LFO runtime, stats
     audio/types.ts         AudioFrame seam for phase 2
-    ui/*.svelte            Section, Slider, Toggle
+    ui/*.svelte            Section, Slider, Toggle, LfoScope
 ```
 
 Browser cleanup is returned from `onMount` (`removeEventListener`, `dispose()`), not `onDestroy`. There is no `onDestroy` in the project.
@@ -318,6 +319,10 @@ factor[target] *= max(0, 1 + signal)
 Shapes are sine, triangle, ramp and a periodic smooth random: 16 seeded values per route, interpolated with `smoothstep` and wrapped, so it wanders rather than stepping like white noise. Retrigger sets `phase = 0`, `env = 0`; the route then swells back in. Targets multiply curl strength, noise scale, spring stiffness, pointer strength, pulse strength, wave strength, fracture pull, depth amount, point size or opacity. Several routes may share a target; the factors compose multiplicatively. Scale, size and opacity are clamped so a deep LFO cannot collapse the field.
 
 LFOs are preserved across presets and randomization, along with the palette, seed and particle count.
+
+### Waveform scope
+
+Each route draws its own scope (`src/lib/ui/LfoScope.svelte`). The faint full-scale curve shows the shape; the solid curve is scaled by the current depth; the dot is the live signal after the retrigger envelope, and the vertical hairline is the phase. The scope runs on its own `requestAnimationFrame` and reads `ParticleField.getLfoView(index)`, which returns plain numbers. The Svelte UI is never written per frame. The field clock starts when the page mounts, so the scopes animate even before an image is loaded; stats stay empty until a simulation exists. Changing the look re-reads the `--ink`/`--line` variables through a `MutationObserver`.
 
 ---
 
