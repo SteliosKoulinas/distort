@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { SampledParticles } from '#lib/image/sample';
 import type { Modulation, SimParams } from '#lib/core/params';
+import type { AudioFrame } from '#lib/audio/types';
 import { renderFragmentShader, renderVertexShader } from './shaders/render';
 
 const MAX_DPR = 1.5;
@@ -144,14 +145,23 @@ export class ParticleView {
 		this.updateFit();
 	}
 
-	render(positionTexture: THREE.Texture | null, time: number, modulation: Modulation): void {
+	render(
+		positionTexture: THREE.Texture | null,
+		time: number,
+		modulation: Modulation,
+		audio: AudioFrame,
+		motion: number
+	): void {
 		if (this.points) {
 			this.points.visible = positionTexture !== null;
 			const u = this.material.uniforms;
+			// Point size and opacity only swell when the piece is actually
+			// moving, so a silent image keeps its printed grain.
+			const amp = Math.max(0, Math.min(1, audio.amp)) * motion;
 			u.uPosition.value = positionTexture;
 			u.uTime.value = time;
-			u.uPointSize.value = this.pointSize * modulation.size;
-			u.uOpacity.value = this.opacity * modulation.opacity;
+			u.uPointSize.value = this.pointSize * modulation.size * (1 + amp * 0.32);
+			u.uOpacity.value = Math.min(1.15, this.opacity * modulation.opacity * (1 + amp * 0.16));
 		}
 		this.renderer.render(this.scene, this.camera);
 	}

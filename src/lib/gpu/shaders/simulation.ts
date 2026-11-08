@@ -59,6 +59,11 @@ uniform float uFractureSpread;
 
 uniform float uDepthStrength;
 
+uniform float uAudioBass;
+uniform float uAudioMid;
+uniform float uAudioTreble;
+uniform float uAudioAmp;
+
 uniform float uAssembly;
 
 varying vec2 vUv;
@@ -90,7 +95,8 @@ void main() {
   if (uCurlStrength > 0.0001) {
     vec3 q = pos * uCurlScale + vec3(0.0, 0.0, uTime * uCurlSpeed);
     vec3 flow = curlNoise(q);
-    acc += flow * (uCurlStrength * CURL_GAIN * free) * (0.65 + seed * 0.7);
+    float audioCurl = 1.0 + uAudioMid * 1.15;
+    acc += flow * (uCurlStrength * CURL_GAIN * audioCurl * free) * (0.65 + seed * 0.7);
   }
 
   // Hooke's law. Assembly adds a temporary stiff spring, and still works
@@ -129,7 +135,8 @@ void main() {
     vec2 dir = d / dist;
     float env = exp(-dist * 1.6);
     float phase = dist * uWaveFrequency - uTime * uWaveSpeed;
-    acc.xy += dir * sin(phase) * env * uWaveStrength * WAVE_GAIN * free;
+    float audioWave = 1.0 + uAudioMid * 0.9;
+    acc.xy += dir * sin(phase) * env * uWaveStrength * WAVE_GAIN * audioWave * free;
     acc.z += cos(phase) * env * uWaveStrength * 0.12 * free;
   }
 
@@ -173,6 +180,31 @@ void main() {
   if (uDepthStrength > 0.0001) {
     float n = snoise(vec3(pos.xy * 1.7, uTime * 0.12 + seed * 5.0));
     acc.z += n * uDepthStrength * DEPTH_GAIN * free;
+  }
+
+  // Spectral bands. Each drives a different kind of motion, so the image
+  // reacts instead of merely brightening.
+  if (uAudioBass > 0.0001) {
+    vec2 d = pos.xy;
+    float dist = length(d) + 0.0001;
+    vec2 dir = d / dist;
+    // A soft radial bloom: strongest near the middle.
+    float falloff = 1.0 / (1.0 + dist * 1.6);
+    acc.xy += dir * uAudioBass * 0.6 * falloff * free;
+    acc.z += (seed - 0.5) * uAudioBass * 0.45 * free;
+  }
+
+  if (uAudioTreble > 0.0001) {
+    // Fast, small jitter plus depth chatter.
+    vec2 jitter = vec2(seed, hash12(vUv * 613.0 + floor(uTime * 18.0))) - 0.5;
+    acc.xy += jitter * uAudioTreble * 0.16 * free;
+    acc.z += (seed - 0.5) * uAudioTreble * 1.1 * free;
+  }
+
+  if (uAudioAmp > 0.0001) {
+    // Overall amplitude: a slow turbulence that follows the mix.
+    vec3 flow = curlNoise(pos * 1.6 + vec3(0.0, 0.0, uTime * 0.45));
+    acc += flow * uAudioAmp * 0.22 * free;
   }
 
   acc /= mass;

@@ -58,6 +58,23 @@ export interface PaletteSettings {
 	chroma: number;
 }
 
+/**
+ * Audio settings. `motion` is the master gate: it decides how far the image
+ * opens while a track plays. With no audio the field stays close to the
+ * source, so the piece reads as a quiet photograph; pressing play starts the
+ * motion. `amount` only trims the spectral forces themselves.
+ */
+export interface AudioSettings {
+	reactive: boolean;
+	/** Depth of the spectral band forces, 0..2. */
+	amount: number;
+	/** How far the image opens while audio plays, 0..1. */
+	motion: number;
+	bass: boolean;
+	mid: boolean;
+	treble: boolean;
+}
+
 export interface SimParams {
 	particleCount: number;
 	pointSize: number;
@@ -102,6 +119,9 @@ export interface SimParams {
 	/** Four user LFOs. Phases live in ParticleField, not in this snapshot. */
 	lfos: LfoSettings[];
 
+	/** Audio gate, spectral depth and band routing. */
+	audio: AudioSettings;
+
 	/** Sampling only. Changing it requires a resample, not a shader update. */
 	edgeBoost: number;
 	/** Changes noise offsets, fracture jitter and sampling jitter. */
@@ -120,17 +140,17 @@ export interface Preset {
 const drift: SimParams = {
 	particleCount: 200_000,
 	pointSize: 1.2,
-	opacity: 0.65,
+	opacity: 0.68,
 
 	curlEnabled: true,
-	curlScale: 1.25,
-	curlSpeed: 0.16,
-	curlStrength: 0.8,
+	curlScale: 1.6,
+	curlSpeed: 0.15,
+	curlStrength: 0.7,
 
 	springEnabled: true,
-	spring: 1.15,
+	spring: 1.45,
 	damping: 0.925,
-	maxSpeed: 3,
+	maxSpeed: 2.4,
 
 	pointerEnabled: true,
 	pointerStrength: 2.2,
@@ -138,22 +158,22 @@ const drift: SimParams = {
 	pointerSwirl: 0.5,
 
 	pulseEnabled: true,
-	pulseStrength: 3.8,
+	pulseStrength: 3.4,
 	pulseRadius: 0.5,
 	autoPulse: false,
 
 	waveEnabled: false,
-	waveStrength: 0.6,
+	waveStrength: 0.5,
 	waveFrequency: 9,
 	waveSpeed: 2.4,
 
 	fractureEnabled: false,
-	fractureStrength: 3,
-	fractureScale: 6,
-	fractureSpread: 0.5,
+	fractureStrength: 2,
+	fractureScale: 8,
+	fractureSpread: 0.4,
 
 	depthEnabled: true,
-	depthStrength: 0.8,
+	depthStrength: 0.45,
 
 	palette: {
 		mode: 'auto',
@@ -168,6 +188,15 @@ const drift: SimParams = {
 		{ enabled: false, target: 'size', shape: 'random', rate: 0.16, depth: 0.18 }
 	],
 
+	audio: {
+		reactive: true,
+		amount: 1,
+		motion: 0.65,
+		bass: true,
+		mid: true,
+		treble: true
+	},
+
 	edgeBoost: 1.25,
 	seed: 1337
 };
@@ -176,7 +205,8 @@ export function createDefaultParams(): SimParams {
 	return {
 		...drift,
 		palette: { ...drift.palette },
-		lfos: drift.lfos.map((lfo) => ({ ...lfo }))
+		lfos: drift.lfos.map((lfo) => ({ ...lfo })),
+		audio: { ...drift.audio }
 	};
 }
 
@@ -184,83 +214,83 @@ export const PRESETS: Preset[] = [
 	{
 		id: 'drift',
 		name: 'Drift',
-		note: 'Fine dust, slow incompressible drift, a loose return to the image.',
+		note: 'Fine dust, a slow incompressible drift. The image stays legible; the field only leans away from it.',
 		params: {}
 	},
 	{
 		id: 'ash',
 		name: 'Ash',
-		note: 'Light, wide drift with more depth scatter and almost no pull home.',
+		note: 'A wide, gentle haze. Soft edges breathe outward, but the face stays in place.',
 		params: {
 			pointSize: 1.0,
-			opacity: 0.55,
-			curlScale: 2.4,
-			curlSpeed: 0.08,
-			curlStrength: 1.35,
-			spring: 0.55,
-			damping: 0.955,
-			pointerStrength: 1.2,
-			pulseStrength: 2.0,
-			depthStrength: 1.4,
-			edgeBoost: 1.6
+			opacity: 0.52,
+			curlScale: 2.0,
+			curlSpeed: 0.1,
+			curlStrength: 0.5,
+			spring: 1.5,
+			damping: 0.93,
+			pointerStrength: 1.4,
+			pulseStrength: 2.2,
+			depthStrength: 0.35,
+			edgeBoost: 1.4
 		}
 	},
 	{
 		id: 'undertow',
 		name: 'Undertow',
-		note: 'A strong, slow vortex with a traveling ring and a late return.',
+		note: 'A slow vortex with a traveling ring. The pull is firm, so the image returns between swells.',
 		params: {
 			pointSize: 1.3,
-			opacity: 0.65,
-			curlScale: 0.9,
-			curlSpeed: 0.3,
-			curlStrength: 1.65,
-			spring: 2.0,
-			damping: 0.9,
-			pointerStrength: 3.0,
+			opacity: 0.66,
+			curlScale: 1.1,
+			curlSpeed: 0.26,
+			curlStrength: 0.95,
+			spring: 2.1,
+			damping: 0.92,
+			pointerStrength: 2.4,
 			pointerRadius: 0.5,
 			pointerSwirl: 0.9,
-			pulseStrength: 2.4,
+			pulseStrength: 2.2,
 			waveEnabled: true,
-			waveStrength: 0.5,
+			waveStrength: 0.4,
 			waveFrequency: 6,
 			waveSpeed: 2.0,
-			depthStrength: 0.6,
+			depthStrength: 0.4,
 			edgeBoost: 1.25
 		}
 	},
 	{
 		id: 'shatter',
 		name: 'Shatter',
-		note: 'Jittered Voronoi cells pull the image into drifting shards.',
+		note: 'A few fine shards drift apart, each cell held close to its own place in the image.',
 		params: {
 			pointSize: 1.1,
-			opacity: 0.65,
-			curlStrength: 0.45,
-			spring: 0.7,
+			opacity: 0.66,
+			curlStrength: 0.3,
+			spring: 2.6,
 			damping: 0.94,
-			pointerStrength: 1.0,
-			pulseStrength: 2.5,
+			pointerStrength: 1.2,
+			pulseStrength: 2.2,
 			fractureEnabled: true,
-			fractureStrength: 3.2,
-			fractureScale: 5.5,
-			fractureSpread: 0.55,
-			depthStrength: 0.5,
-			edgeBoost: 1.8
+			fractureStrength: 1.0,
+			fractureScale: 9,
+			fractureSpread: 0.35,
+			depthStrength: 0.3,
+			edgeBoost: 1.5
 		}
 	},
 	{
 		id: 'still',
 		name: 'Still',
-		note: 'Close to the source image. The particles only breathe.',
+		note: 'Closest to the source. The particles only breathe.',
 		params: {
 			pointSize: 1.1,
-			opacity: 0.75,
-			curlStrength: 0.15,
+			opacity: 0.78,
+			curlStrength: 0.08,
 			spring: 3.5,
 			damping: 0.88,
-			pointerStrength: 0.6,
-			pulseStrength: 1.2,
+			pointerStrength: 0.9,
+			pulseStrength: 1.6,
 			depthEnabled: false,
 			edgeBoost: 1.15
 		}
@@ -280,7 +310,8 @@ export function applyPreset(base: SimParams, preset: Preset): SimParams {
 		seed: base.seed,
 		particleCount: base.particleCount,
 		palette: { ...base.palette },
-		lfos: base.lfos.map((lfo) => ({ ...lfo }))
+		lfos: base.lfos.map((lfo) => ({ ...lfo })),
+		audio: { ...base.audio }
 	};
 }
 
@@ -291,26 +322,26 @@ export function randomizeLook(base: SimParams, rand: () => number): SimParams {
 		seed: Math.floor(rand() * 1_000_000),
 		pointSize: between(0.9, 1.9),
 		opacity: between(0.55, 0.85),
-		curlScale: between(0.7, 3.0),
-		curlSpeed: between(0.04, 0.34),
-		curlStrength: between(0.25, 1.8),
-		spring: between(0.35, 2.8),
-		damping: between(0.875, 0.965),
-		pointerStrength: between(-1.2, 3.4),
+		curlScale: between(0.8, 2.8),
+		curlSpeed: between(0.05, 0.3),
+		curlStrength: between(0.2, 1.0),
+		spring: between(0.7, 2.8),
+		damping: between(0.895, 0.955),
+		pointerStrength: between(-1.2, 3.0),
 		pointerRadius: between(0.22, 0.7),
 		pointerSwirl: between(0, 1.2),
-		pulseStrength: between(1.2, 6),
+		pulseStrength: between(1.2, 4.4),
 		pulseRadius: between(0.3, 0.8),
 		waveEnabled: rand() > 0.48,
-		waveStrength: between(0.2, 1.5),
+		waveStrength: between(0.2, 1.0),
 		waveFrequency: between(3, 13),
 		waveSpeed: between(1, 4),
-		fractureEnabled: rand() > 0.7,
-		fractureStrength: between(1.2, 5),
-		fractureScale: between(3, 10),
-		fractureSpread: between(0.2, 0.9),
-		depthEnabled: rand() > 0.32,
-		depthStrength: between(0.2, 1.8),
+		fractureEnabled: rand() > 0.75,
+		fractureStrength: between(0.6, 2.2),
+		fractureScale: between(5, 12),
+		fractureSpread: between(0.2, 0.7),
+		depthEnabled: rand() > 0.42,
+		depthStrength: between(0.15, 0.9),
 		palette: {
 			...base.palette,
 			amount: between(0.7, 1),

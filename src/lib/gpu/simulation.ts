@@ -139,6 +139,10 @@ export class GpuSimulation {
 			uFractureScale: { value: 6 },
 			uFractureSpread: { value: 0.5 },
 			uDepthStrength: { value: 0 },
+			uAudioBass: { value: 0 },
+			uAudioMid: { value: 0 },
+			uAudioTreble: { value: 0 },
+			uAudioAmp: { value: 0 },
 			uAssembly: { value: 0 }
 		};
 
@@ -205,6 +209,7 @@ export class GpuSimulation {
 		modulation: Modulation,
 		pointer: PointerState,
 		audio: AudioFrame,
+		motion: number,
 		assembly: number
 	): void {
 		const u = this.uniforms;
@@ -213,7 +218,10 @@ export class GpuSimulation {
 		u.uDt.value = dt;
 		u.uSeed.value = Math.floor(params.seed) % 100_000;
 
-		u.uCurlStrength.value = params.curlEnabled ? params.curlStrength * modulation.curl : 0;
+		// Ambient forces are gated by `motion`, so a silent field stays close
+		// to the source image. Pointer and pulse are left alone: they are
+		// deliberate gestures, not ambience.
+		u.uCurlStrength.value = params.curlEnabled ? params.curlStrength * modulation.curl * motion : 0;
 		u.uCurlScale.value = Math.max(0.1, params.curlScale * modulation.scale);
 		u.uCurlSpeed.value = params.curlSpeed;
 
@@ -231,17 +239,25 @@ export class GpuSimulation {
 		u.uPulseStrength.value = params.pulseStrength * modulation.pulse;
 		u.uPulseRadius.value = Math.max(0.01, params.pulseRadius);
 
-		u.uWaveStrength.value = params.waveEnabled ? params.waveStrength * modulation.wave : 0;
+		u.uWaveStrength.value = params.waveEnabled
+			? params.waveStrength * modulation.wave * motion
+			: 0;
 		u.uWaveFrequency.value = params.waveFrequency;
 		u.uWaveSpeed.value = params.waveSpeed;
 
 		u.uFractureStrength.value = params.fractureEnabled
-			? params.fractureStrength * modulation.fracture
+			? params.fractureStrength * modulation.fracture * motion
 			: 0;
 		u.uFractureScale.value = Math.max(0.5, params.fractureScale);
 		u.uFractureSpread.value = params.fractureSpread;
 
-		u.uDepthStrength.value = params.depthEnabled ? params.depthStrength * modulation.depth : 0;
+		u.uDepthStrength.value = params.depthEnabled
+			? params.depthStrength * modulation.depth * motion
+			: 0;
+		u.uAudioBass.value = Math.max(0, Math.min(2, audio.bass)) * motion;
+		u.uAudioMid.value = Math.max(0, Math.min(2, audio.mid)) * motion;
+		u.uAudioTreble.value = Math.max(0, Math.min(2, audio.treble)) * motion;
+		u.uAudioAmp.value = Math.max(0, Math.min(2, audio.amp)) * motion;
 		u.uAssembly.value = assembly;
 
 		u.uPositions.value = this.positions[this.read].texture;
