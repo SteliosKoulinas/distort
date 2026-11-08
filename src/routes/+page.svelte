@@ -53,11 +53,6 @@
 	let audioLoaded = $state(false);
 	let audioLoading = $state(false);
 	let audioPlaying = $state(false);
-	let audioReactive = $state(true);
-	let audioAmount = $state(1);
-	let audioBass = $state(true);
-	let audioMid = $state(true);
-	let audioTreble = $state(true);
 
 	function setLook(next: 'light' | 'dark') {
 		look = next;
@@ -109,10 +104,11 @@
 	 */
 	function applyAudioRouting() {
 		if (!audioEngine) return;
-		audioEngine.routing.amount = audioReactive ? audioAmount : 0;
-		audioEngine.routing.bass = audioBass;
-		audioEngine.routing.mid = audioMid;
-		audioEngine.routing.treble = audioTreble;
+		const audio = params.audio;
+		audioEngine.routing.amount = audio.reactive ? audio.amount : 0;
+		audioEngine.routing.bass = audio.bass;
+		audioEngine.routing.mid = audio.mid;
+		audioEngine.routing.treble = audio.treble;
 	}
 
 	let hudCount = $derived(
@@ -222,11 +218,12 @@
 	// Same idea for audio: the reactive controls are copied into the engine's
 	// plain routing object, which its metering clock reads per frame.
 	$effect(() => {
+		const audio = params.audio;
 		const routing = {
-			amount: audioReactive ? audioAmount : 0,
-			bass: audioBass,
-			mid: audioMid,
-			treble: audioTreble
+			amount: audio.reactive ? audio.amount : 0,
+			bass: audio.bass,
+			mid: audio.mid,
+			treble: audio.treble
 		};
 		const engine = audioEngine;
 		if (!engine) return;
@@ -624,8 +621,8 @@
 					</label>
 				{:else}
 					<p class="empty-copy">
-						Add a track and let its spectrum move the particles. The file is decoded locally; it is
-						never uploaded.
+						The image stands still until you play. Add a track and its spectrum opens the motion —
+						decoded locally, never uploaded.
 					</p>
 				{/if}
 
@@ -641,41 +638,50 @@
 
 				<Toggle
 					label="Audio reactive"
-					bind:checked={audioReactive}
-					hint="Spectral bands push the particles."
+					bind:checked={params.audio.reactive}
+					hint="When off, the image stays still."
 				/>
 				<Slider
-					label="Amount"
-					bind:value={audioAmount}
+					label="Motion"
+					bind:value={params.audio.motion}
+					min={0}
+					max={1}
+					step={0.01}
+					format={fmt2}
+					hint="How far the image opens while audio plays. At 0 it stays near the source."
+				/>
+				<Slider
+					label="Spectrum"
+					bind:value={params.audio.amount}
 					min={0}
 					max={2}
 					step={0.01}
 					format={fmt2}
-					hint="Master depth of every band. The image is unchanged at 0."
+					hint="Depth of the spectral band forces on top of the motion."
 				/>
 
 				<div class="audio-toggle" role="group" aria-label="Spectral bands">
 					<button
 						type="button"
-						class:active={audioBass}
-						aria-pressed={audioBass}
-						onclick={() => (audioBass = !audioBass)}
+						class:active={params.audio.bass}
+						aria-pressed={params.audio.bass}
+						onclick={() => (params.audio.bass = !params.audio.bass)}
 					>
 						Bass
 					</button>
 					<button
 						type="button"
-						class:active={audioMid}
-						aria-pressed={audioMid}
-						onclick={() => (audioMid = !audioMid)}
+						class:active={params.audio.mid}
+						aria-pressed={params.audio.mid}
+						onclick={() => (params.audio.mid = !params.audio.mid)}
 					>
 						Mid
 					</button>
 					<button
 						type="button"
-						class:active={audioTreble}
-						aria-pressed={audioTreble}
-						onclick={() => (audioTreble = !audioTreble)}
+						class:active={params.audio.treble}
+						aria-pressed={params.audio.treble}
+						onclick={() => (params.audio.treble = !params.audio.treble)}
 					>
 						Treble
 					</button>

@@ -51,7 +51,8 @@ Requirements: a browser with WebGL2 and render-to-float support (`EXT_color_buff
 ### Using it
 
 - Drop a JPG/PNG/WebP anywhere on the stage, or click **Replace image**.
-- Drop an audio file on the stage, or open **Audio** and click **Choose audio**. Press **Play**; the spectrum draws in the section and pushes the particles. The file is decoded locally and never uploaded.
+- Drop an audio file on the stage, or open **Audio** and click **Choose audio**. The image stays still until you press **Play**; then the spectrum opens the motion and the piece breathes with the track. The file is decoded locally and never uploaded.
+- Set **Motion** to decide how far the image opens while audio plays (0 keeps it near the source). **Spectrum** trims the spectral forces themselves.
 - Pick a preset: **Drift**, **Ash**, **Undertow**, **Shatter**, **Still**.
 - **Reassemble** (`R`) pulls the cloud home, then releases it.
 - **Pulse** (`Space`) fires a radial impulse. **Auto pulse** is a metronome for when no audio is playing; live bass onsets also feed the same `beat` envelope.
@@ -282,7 +283,7 @@ Depth therefore reads as a shimmer of slightly shifting, growing, brightening gr
 
 ### 8. Spectral forces
 
-Audio enters the same acceleration buffer as every other force. The four band uniforms are plain numbers in 0..2:
+Audio enters the same acceleration buffer as every other force. Every ambient and spectral force is scaled by the motion gate (§ Audio reactive) — `0.03 + 0.97 · Motion · envelope` — so a silent field stays on the photograph. The four band uniforms are plain numbers in 0..2:
 
 ```
 bass    radial bloom + z scatter near the centre
@@ -332,7 +333,18 @@ beat    bass − running average, thresholded and normalised
 
 Band values are RMS of the analyser bins, so a narrow tone does not look as loud as wide noise. The running average (`α = 0.06`) turns bass into a transient detector: a positive delta above 0.1 while bass is above 0.16 becomes a `beat` peak. That peak merges with the manual Space/Pulse kick; the simulation owns the decay.
 
-**Routing is plain state.** The section's _Amount_ (0..2), the three band switches and _Audio reactive_ are copied into `AudioEngine.routing` by a Svelte effect. The metering loop reads that object, multiplies the bands, and hands a plain `AudioFrame` to `ParticleField.setAudio()`. The animation loop never reads Svelte state and the page never receives per-frame updates; only the transport clock (4 Hz `timeupdate`) and the small spectrum canvas have their own clocks.
+### Motion is the gate
+
+The image is meant to read as a photograph first. **Motion** (0..1, default 0.65) decides how far it is allowed to open while audio plays; with no track the field sits at a floor of 3% and only breathes. The loop turns the instantaneous mix level into a slow envelope (≈0.3 s attack, ≈1.4 s release) and multiplies the ambient forces — curl, wave, fracture, depth — and the four band uniforms by `0.03 + 0.97 · Motion · envelope`. So:
+
+- silence → effective forces of ~0.01–0.03: essentially the source image;
+- a loud passage → forces follow the loudness and the image is pulled apart;
+- a quiet passage → it settles back toward the photograph;
+- **Motion 0** → the gate is closed; **Motion 1** → the full preset expression.
+
+Pointer and Pulse are deliberately **not** gated: they are manual gestures, so the piece still responds to the hand when nothing is playing. `Spectrum` (0..2) trims only the spectral band forces on top of the gate.
+
+**Routing is plain state.** The section's _Audio reactive_, _Motion_, _Spectrum_ and the three band switches live in `SimParams.audio`. _Audio reactive_ and the band switches are copied into `AudioEngine.routing` by a Svelte effect; the metering loop reads that object, multiplies the bands, and hands a plain `AudioFrame` to `ParticleField.setAudio()`. Motion is read by the animation loop from the same plain snapshot it already holds. The page never receives per-frame updates; only the transport clock (4 Hz `timeupdate`) and the small spectrum canvas have their own clocks.
 
 `src/lib/ui/AudioScope.svelte` draws log-spaced bars from `engine.spectrum` with hairline dividers at 160 Hz and 2 kHz, labelled **Bass / Mid / Treble** below. It re-reads `--ink`/`--line` when the look changes, like the rest of the instrument.
 
@@ -363,13 +375,13 @@ LFOs are preserved across presets and randomization, along with the palette, see
 
 | Preset   | Idea |
 | -------- | ---- |
-| Drift   | Fine dust, slow incompressible drift, loose return. The default. |
-| Ash      | Small, wide drift, more depth scatter, almost no pull home. |
-| Undertow | Strong slow vortex, traveling ring, late return. |
-| Shatter  | Jittered Voronoi cells pull the image into drifting shards. |
-| Still    | Close to the source; the particles only breathe. |
+| Drift    | Fine dust, a slow incompressible drift. The default. |
+| Ash      | A wide, gentle haze; soft edges breathe outward but stay home. |
+| Undertow | A slow vortex with a traveling ring; a firm pull returns the image. |
+| Shatter  | A few fine shards drift apart, each held close to its own cell. |
+| Still    | Closest to the source; the particles only breathe. |
 
-Presets reset the look but keep the user's **seed**, **particle count**, **palette** and **LFOs** so A/B comparisons, quality choices and ongoing modulation remain honest. Count and edge detail resample on pointer release only; all other sliders are uniform updates.
+Presets reset the look but keep the user's **seed**, **particle count**, **palette**, **LFOs** and **audio** settings so A/B comparisons, quality choices and the motion gate remain honest. Count and edge detail resample on pointer release only; all other sliders are uniform updates.
 
 ---
 
@@ -388,7 +400,7 @@ Presets reset the look but keep the user's **seed**, **particle count**, **palet
 
 **Phase 1 — done.** GPU foundation, image decomposition, CDF sampling, renderer, UI, presets, pointer, beat placeholder, performance instrumentation. `npm run check` is clean; `npm run build` produces a static site.
 
-**Phase 1.5 — modulation + audio (this branch).** Animated LFO waveform scopes, and an audio path that decodes a local file, analyses it with a Web Audio `AnalyserNode`, and routes four spectral bands into the existing forces as plain numbers. Onsets raise the same `beat` envelope the Space/Pulse kick uses. Microphone input, gain trim, per-band influence and a spectral-flux onset detector are still open; the `AudioFrame` seam does not change for them.
+**Phase 1.5 — modulation + audio (this branch).** Animated LFO waveform scopes, and an audio path that decodes a local file, analyses it with a Web Audio `AnalyserNode`, and gates the whole field with a loudness envelope so the piece reads as the photograph until play. Onsets raise the same `beat` envelope the Space/Pulse kick uses. Microphone input, gain trim, per-band influence and a spectral-flux onset detector are still open; the `AudioFrame` seam does not change for them.
 
 **Phase 2 — streaming and microphone.** Add input selection beside the upload path: microphone capture and, later, streaming-service playback. Both feed the same `AudioEngine` seam, so the field does not learn where the sound came from.
 
@@ -413,6 +425,8 @@ The new runtime keeps all particle state in float textures, runs exactly two fra
 
 ## Known limits and honest notes
 
+- **The piece is audio-led.** Motion and every ambient force are gated by a slow loudness envelope, so the image reads as the photograph until you press play, and relaxes toward it in quiet passages. If you want the old always-moving wall of dust, set **Motion** to 1 and **Spectrum** to 2, or use **Auto pulse** as a metronome.
+- **Ash and Shatter are deliberately gentle now.** They were re-tuned so the source image stays legible; the shards are small and spring-held, and Ash is a haze rather than a dispersal. Push **Motion** to 1 to see their full range.
 - **Audio is upload-only.** The track is decoded locally from an object URL; there is no microphone or streaming input yet. Cross-origin streams would additionally need CORS-safe media and a user gesture to resume the `AudioContext`.
 - **Approximate Voronoi.** A 3×3 jittered-grid force, not exact cell clipping. Cheap and convincing at this density; not mathematically exact.
 - **Additive highlights can still clip** on very bright images. Defaults (size 1.2, opacity 0.65, Grade amount 0.85) were tuned against a bright 900×1200 test portrait; the sliders and the pre-highlight endpoint of the grade let you recover detail or lean into glow.

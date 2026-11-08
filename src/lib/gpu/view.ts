@@ -149,12 +149,15 @@ export class ParticleView {
 		positionTexture: THREE.Texture | null,
 		time: number,
 		modulation: Modulation,
-		audio: AudioFrame
+		audio: AudioFrame,
+		motion: number
 	): void {
 		if (this.points) {
 			this.points.visible = positionTexture !== null;
 			const u = this.material.uniforms;
-			const amp = Math.max(0, Math.min(1, audio.amp));
+			// Point size and opacity only swell when the piece is actually
+			// moving, so a silent image keeps its printed grain.
+			const amp = Math.max(0, Math.min(1, audio.amp)) * motion;
 			u.uPosition.value = positionTexture;
 			u.uTime.value = time;
 			u.uPointSize.value = this.pointSize * modulation.size * (1 + amp * 0.32);

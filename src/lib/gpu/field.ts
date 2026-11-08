@@ -103,6 +103,10 @@ export class ParticleField {
 	private assembly = 0;
 	private assemblyHold = 0;
 	private autoPulseClock = 0;
+	/** Slow loudness envelope (0..1) that gates how far the image opens. */
+	private audioEnergy = 0;
+	/** Idle floor: a faint breath so a silent field is not dead. */
+	private readonly idleMotion = 0.03;
 
 	constructor(options: ParticleFieldOptions) {
 		this.canvas = options.canvas;
@@ -305,6 +309,17 @@ export class ParticleField {
 		this.audio.beat *= Math.exp(-dt * 4.5);
 		if (this.audio.beat < 0.0005) this.audio.beat = 0;
 
+		// The image sits near the source until audio plays. `audio.amp` is a
+		// plain number from the engine (0 when paused); a slow follower turns
+		// it into "how loud the track is right now", and the Motion amount
+		// decides how far that loudness is allowed to pull the field apart.
+		const audio = this.params.audio;
+		const amp = Math.max(0, Math.min(1, this.audio.amp));
+		const follow = amp > this.audioEnergy ? 1 - Math.exp(-dt * 3.2) : 1 - Math.exp(-dt * 0.7);
+		this.audioEnergy += (amp - this.audioEnergy) * follow;
+		const gate = audio && audio.reactive ? audio.motion : 0;
+		const motion = this.idleMotion + (1 - this.idleMotion) * gate * this.audioEnergy;
+
 		if (this.params.autoPulse && this.params.pulseEnabled) {
 			this.autoPulseClock += dt;
 			if (this.autoPulseClock > 1.7) {
@@ -333,9 +348,10 @@ export class ParticleField {
 					this.modulation,
 					this.pointer,
 					this.audio,
+					motion,
 					this.assembly
 				);
-				this.view.render(this.sim.positionTexture, this.time, this.modulation, this.audio);
+				this.view.render(this.sim.positionTexture, this.time, this.modulation, this.audio, motion);
 			}
 		} catch (error) {
 			this.stop();
