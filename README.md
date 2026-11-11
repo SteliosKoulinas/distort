@@ -52,6 +52,7 @@ Requirements: a browser with WebGL2 and render-to-float support (`EXT_color_buff
 
 - Drop a JPG/PNG/WebP anywhere on the stage, or click **Replace image**.
 - Drop an audio file on the stage, or open **Audio** and click **Choose audio**. The image stays still until you press **Play**; then the spectrum opens the motion and the piece breathes with the track. The file is decoded locally and never uploaded.
+- Or point the field at anything already playing: **System audio** captures the machine's output (Spotify, a DAW, a video, another tab) and **Microphone** captures the room. A captured stream is analysed and muted, never replayed through the speakers.
 - Set **Motion** to decide how far the image opens while audio plays (0 keeps it near the source). **Spectrum** trims the spectral forces themselves.
 - Pick a preset: **Drift**, **Ash**, **Undertow**, **Shatter**, **Still**.
 - **Reassemble** (`R`) pulls the cloud home, then releases it.
@@ -117,7 +118,7 @@ src/
     gpu/view.ts            Three.js renderer, geometry, letterbox fit, DPR cap
     gpu/field.ts           loop, pointer, beat, audio, LFO runtime, stats
     audio/types.ts         AudioFrame { bass, mid, treble, amp, beat }
-    audio/engine.ts        element → AnalyserNode, bands, onset beat, routing
+    audio/engine.ts        file element + live MediaStream → AnalyserNode, bands, onset beat
     ui/*.svelte            Section, Slider, Toggle, LfoScope, AudioScope
 ```
 
@@ -322,7 +323,12 @@ Why not leave the source alone? Additive blending on black accumulates quickly: 
 
 ## Audio reactive
 
-The audio path is one `HTMLAudioElement` fed through `MediaElementAudioSourceNode → AnalyserNode → destination`. The analyser uses FFT 2048, smoothing 0.72, and −90/−10 dB limits. A metering `requestAnimationFrame` runs only while the track plays; on pause, end, replace or dispose it stops and sends one silent frame so the field settles immediately.
+Two kinds of source feed one `AnalyserNode`, so the field never learns where sound came from:
+
+- an uploaded **file**, through an `HTMLAudioElement` → `MediaElementAudioSourceNode` (audible), and
+- a live **`MediaStream`** from `getDisplayMedia` (system audio) or `getUserMedia` (microphone), captured and **muted** — analysed, never replayed.
+
+The analyser uses FFT 2048, smoothing 0.72, and −90/−10 dB limits. A metering `requestAnimationFrame` runs only while sound is arriving; on pause, end, replace, a stopped capture or dispose it stops and sends one silent frame so the field settles immediately.
 
 ```
 bass    RMS 20–160 Hz
@@ -333,6 +339,12 @@ beat    bass − running average, thresholded and normalised
 ```
 
 Band values are RMS of the analyser bins, so a narrow tone does not look as loud as wide noise. The running average (`α = 0.06`) turns bass into a transient detector: a positive delta above 0.1 while bass is above 0.16 becomes a `beat` peak. That peak merges with the manual Space/Pulse kick; the simulation owns the decay.
+
+### Live input and DRM
+
+**System audio** is the answer to "can it follow Spotify?". The Spotify *API* cannot give a visualiser any audio: the Web Playback SDK streams through Widevine DRM, so its Frames never reach Web Audio, and since 27 Nov 2024 Spotify also closed `Audio Features` / `Audio Analysis` to new apps. **Tab** capture of the Spotify web player is likewise DRM-blocked. Capturing the **system** output sidesteps all of it: the operating system mixes the audio, so the browser can analyse whatever is playing, with no API key, no OAuth and no Premium requirement.
+
+`getDisplayMedia` requires a user gesture and a picker choice; on macOS/Windows pick the **entire screen** and enable **Share system audio**. A video track is requested because display capture usually needs one, and it is ignored. If the user stops sharing, `MediaStreamTrack`'s `ended` event clears the live state.
 
 ### Motion is the gate
 
@@ -405,9 +417,9 @@ Presets reset the look but keep the user's **seed**, **particle count**, **palet
 
 **Phase 1 — done.** GPU foundation, image decomposition, CDF sampling, renderer, UI, presets, pointer, beat placeholder, performance instrumentation. `npm run check` is clean; `npm run build` produces a static site.
 
-**Phase 1.5 — modulation + audio (this branch).** Animated LFO waveform scopes, and an audio path that decodes a local file, analyses it with a Web Audio `AnalyserNode`, and gates the whole field with a loudness envelope so the piece reads as the photograph until play. Onsets raise the same `beat` envelope the Space/Pulse kick uses. Microphone input, gain trim, per-band influence and a spectral-flux onset detector are still open; the `AudioFrame` seam does not change for them.
+**Phase 1.5 — modulation + audio.** Animated LFO waveform scopes, and an audio path that analyses a file with a Web Audio `AnalyserNode` and gates the whole field with a loudness envelope, so the piece reads as the photograph until sound arrives.
 
-**Phase 2 — streaming and microphone.** Add input selection beside the upload path: microphone capture and, later, streaming-service playback. Both feed the same `AudioEngine` seam, so the field does not learn where the sound came from.
+**Phase 2 — live input.** Microphone and system-audio capture through the same analyser, analysed and muted. Still open: gain trim, per-band influence, a spectral-flux onset detector, and a small on-screen note about the browser's screen-sharing indicator. Streaming *services* cannot be tapped directly (DRM) — system capture is the route, and it already works.
 
 **Phase 3 — polish and editioning.** URL-encoded presets and seeds, PNG/WebM export, still-frame capture at 2× DPR, keyboard-focusable canvas controls, reduced-motion behavior, and a mobile-specific layout pass. Optional: image sequences or short video as the source.
 
@@ -432,7 +444,7 @@ The new runtime keeps all particle state in float textures, runs exactly two fra
 
 - **The piece is audio-led.** Motion and every ambient force are gated by a slow loudness envelope, so the image reads as the photograph until you press play, and relaxes toward it in quiet passages. If you want the old always-moving wall of dust, set **Motion** to 1 and **Spectrum** to 2, or use **Auto pulse** as a metronome.
 - **Ash and Shatter are deliberately gentle now.** They were re-tuned so the source image stays legible; the shards are small and spring-held, and Ash is a haze rather than a dispersal. Push **Motion** to 1 to see their full range.
-- **Audio is upload-only.** The track is decoded locally from an object URL; there is no microphone or streaming input yet. Cross-origin streams would additionally need CORS-safe media and a user gesture to resume the `AudioContext`.
+- **Audio comes from a file or a live capture, not from Spotify's API.** The Spotify Web Playback SDK streams through Widevine DRM, so its audio never reaches Web Audio, and Spotify closed `Audio Features`/`Audio Analysis` to new apps on 27 Nov 2024. To follow Spotify, capture **system audio** (see above) — zero cost, no API key, no Premium. A hosted build cannot capture without a user gesture and a picker choice, and mobile browsers do not implement `getDisplayMedia({ audio: true })`, so live capture is a desktop feature. Tab capture of DRM content is blocked by the browser; only whole-system audio works.
 - **Approximate Voronoi.** A 3×3 jittered-grid force, not exact cell clipping. Cheap and convincing at this density; not mathematically exact.
 - **Additive highlights can still clip** on very bright images. Defaults (size 1.2, opacity 0.65, Grade amount 0.85) were tuned against a bright 900×1200 test portrait; the sliders and the pre-highlight endpoint of the grade let you recover detail or lean into glow.
 - **The grade is a treatment, not a reconstruction.** Auto follows the dominant hue; a heavily mixed image will be unified to one family, which is the point. Switch to Source if you want the literal photograph.

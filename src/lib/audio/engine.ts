@@ -29,26 +29,40 @@ export interface AudioRouting {
 }
 
 /**
- * Upload → decoded element → analyser → speakers, plus a small metering
- * clock. It runs only while audio plays. The page hands the resulting
- * AudioFrame to ParticleField.setAudio, which is a plain method.
+ * Two kinds of source feed the same analyser:
+ *
+ * 1. an uploaded file, through an `HTMLAudioElement` (played to the speakers),
+ * 2. a live `MediaStream` — system audio or a microphone. A captured stream
+ *    is analysed but *muted* to the output, so the field can follow whatever
+ *    is playing (Spotify, a DAW, a room) without echoing it back.
+ *
+ * Either way the result is a plain `AudioFrame` handed to
+ * `ParticleField.setAudio`. The animation loop never learns where sound came
+ * from.
  */
 export class AudioEngine {
 	readonly routing: AudioRouting = { amount: 1, bass: true, mid: true, treble: true };
 
 	onTime: ((time: number, duration: number) => void) | null = null;
 	onEnded: (() => void) | null = null;
+	/** Fired when a live capture ends on its own (the user stops sharing). */
+	onStreamEnded: (() => void) | null = null;
 
 	private readonly element: HTMLAudioElement;
 	private context: AudioContext | null = null;
 	private analyser: AnalyserNode | null = null;
-	private source: MediaElementAudioSourceNode | null = null;
+	private outputGain: GainNode | null = null;
+	private elementSource: MediaElementAudioSourceNode | null = null;
+	private streamSource: MediaStreamAudioSourceNode | null = null;
+	private stream: MediaStream | null = null;
 	private spectrumData: Uint8Array<ArrayBuffer> | null = null;
 	private frameSink: ((frame: AudioFrame) => void) | null = null;
 	private objectUrl = '';
 	private raf = 0;
 	private beatAverage = 0;
 	private playing = false;
+	private live = false;
+	private liveLabel = '';
 	private disposed = false;
 
 	constructor() {
@@ -60,6 +74,15 @@ export class AudioEngine {
 
 	get isPlaying(): boolean {
 		return this.playing;
+	}
+
+	/** True while analysing a captured stream instead of a file. */
+	get isLive(): boolean {
+		return this.live;
+	}
+
+	get liveName(): string {
+		return this.liveLabel;
 	}
 
 	get currentTime(): number {
@@ -88,6 +111,7 @@ export class AudioEngine {
 	}
 
 	async load(file: File): Promise<AudioTrack> {
+		this.detachStream();
 		this.pause();
 		this.ensureContext();
 
@@ -119,13 +143,14 @@ export class AudioEngine {
 	}
 
 	async play(): Promise<void> {
-		if (this.disposed) return;
+		if (this.disposed || this.live) return;
 		this.ensureContext();
 		if (this.context?.state === 'suspended') await this.context.resume();
 		if (this.duration > 0 && this.element.currentTime >= this.duration - 0.01) {
 			this.element.currentTime = 0;
 		}
 
+		this.connectElement(true);
 		await this.element.play();
 		this.playing = true;
 		this.startMetering();
@@ -138,14 +163,81 @@ export class AudioEngine {
 	}
 
 	seek(seconds: number): void {
-		if (this.duration <= 0) return;
+		if (this.live || this.duration <= 0) return;
 		this.element.currentTime = Math.max(0, Math.min(this.duration, seconds));
 		this.onTime?.(this.currentTime, this.duration);
+	}
+
+	/**
+	 * Analyse a captured stream. The stream is routed to the analyser and then
+	 * to a silent gain, so the captured audio is never replayed. The caller
+	 * owns the permission prompt (`getDisplayMedia` / `getUserMedia`).
+	 */
+	attachStream(stream: MediaStream, label: string): void {
+		if (this.disposed) {
+			for (const track of stream.getTracks()) track.stop();
+			return;
+		}
+
+		this.pause();
+		this.ensureContext();
+		if (!this.context || !this.analyser) {
+			for (const track of stream.getTracks()) track.stop();
+			return;
+		}
+
+		void this.context.resume();
+		this.detachStream();
+
+		const audioTracks = stream.getAudioTracks();
+		if (audioTracks.length === 0) {
+			for (const track of stream.getTracks()) track.stop();
+			return;
+		}
+
+		this.stream = stream;
+		this.liveLabel = label;
+		this.streamSource = this.context.createMediaStreamSource(stream);
+		this.streamSource.connect(this.analyser);
+		if (this.outputGain) this.outputGain.gain.value = 0;
+
+		this.beatAverage = 0;
+		this.live = true;
+		this.playing = true;
+
+		// A live capture can end from the browser's own affordance.
+		for (const track of audioTracks) track.addEventListener('ended', this.handleStreamTrackEnded);
+
+		this.startMetering();
+	}
+
+	detachStream(): void {
+		if (this.stream) {
+			for (const track of this.stream.getTracks()) {
+				track.removeEventListener('ended', this.handleStreamTrackEnded);
+				track.stop();
+			}
+		}
+		if (this.streamSource) {
+			try {
+				this.streamSource.disconnect();
+			} catch {
+				/* already disconnected */
+			}
+		}
+		this.streamSource = null;
+		this.stream = null;
+		this.live = false;
+		this.liveLabel = '';
+
+		if (this.outputGain) this.outputGain.gain.value = 1;
+		if (!this.disposed) this.stopMetering();
 	}
 
 	dispose(): void {
 		if (this.disposed) return;
 		this.disposed = true;
+		this.detachStream();
 		this.stopMetering();
 		this.playing = false;
 		this.element.pause();
@@ -153,16 +245,18 @@ export class AudioEngine {
 		this.element.removeEventListener('ended', this.handleEnded);
 		this.element.removeAttribute('src');
 		this.element.load();
-		this.source?.disconnect();
+		this.elementSource?.disconnect();
 		this.analyser?.disconnect();
 		void this.context?.close();
-		this.source = null;
+		this.elementSource = null;
 		this.analyser = null;
+		this.outputGain = null;
 		this.context = null;
 		this.spectrumData = null;
 		this.frameSink = null;
 		this.onTime = null;
 		this.onEnded = null;
+		this.onStreamEnded = null;
 		if (this.objectUrl) URL.revokeObjectURL(this.objectUrl);
 		this.objectUrl = '';
 	}
@@ -185,14 +279,25 @@ export class AudioEngine {
 		analyser.minDecibels = -90;
 		analyser.maxDecibels = -10;
 
-		const source = context.createMediaElementSource(this.element);
-		source.connect(analyser);
-		analyser.connect(context.destination);
+		// The analyser is always pulled through a gain node. File playback is
+		// audible (gain 1); a captured stream is silent (gain 0).
+		const outputGain = context.createGain();
+		outputGain.gain.value = 1;
+		analyser.connect(outputGain);
+		outputGain.connect(context.destination);
 
 		this.context = context;
 		this.analyser = analyser;
-		this.source = source;
+		this.outputGain = outputGain;
 		this.spectrumData = new Uint8Array(analyser.frequencyBinCount);
+	}
+
+	private connectElement(audible: boolean): void {
+		if (!this.context || !this.analyser) return;
+		if (!this.elementSource) this.elementSource = this.context.createMediaElementSource(this.element);
+		this.streamSource?.disconnect();
+		this.elementSource.connect(this.analyser);
+		if (this.outputGain) this.outputGain.gain.value = audible ? 1 : 0;
 	}
 
 	private startMetering(): void {
@@ -265,5 +370,11 @@ export class AudioEngine {
 		this.playing = false;
 		this.stopMetering();
 		this.onEnded?.();
+	};
+
+	private handleStreamTrackEnded = (): void => {
+		this.detachStream();
+		this.playing = false;
+		this.onStreamEnded?.();
 	};
 }

@@ -55,6 +55,8 @@
 	let audioLoaded = $state(false);
 	let audioLoading = $state(false);
 	let audioPlaying = $state(false);
+	let audioLive = $state(false);
+	let audioLiveName = $state('');
 
 	function setLook(next: 'light' | 'dark') {
 		look = next;
@@ -170,6 +172,10 @@
 		engine.onEnded = () => {
 			audioPlaying = false;
 			audioTime = audioDuration;
+		};
+		engine.onStreamEnded = () => {
+			audioLive = false;
+			audioLiveName = '';
 		};
 		audioEngine = engine;
 		audioSource.engine = engine;
@@ -293,6 +299,7 @@
 			return;
 		}
 
+		stopLive();
 		audioLoading = true;
 		try {
 			const track = await engine.load(file);
@@ -322,7 +329,7 @@
 
 	async function toggleAudio() {
 		const engine = audioEngine;
-		if (!engine || !audioLoaded || audioLoading) return;
+		if (!engine || !audioLoaded || audioLoading || audioLive) return;
 
 		errorMessage = '';
 		if (engine.isPlaying) {
@@ -347,6 +354,73 @@
 		if (!Number.isFinite(next)) return;
 		audioEngine?.seek(next);
 		audioTime = next;
+	}
+
+	/**
+	 * Analyse whatever the machine is playing — Spotify, a DAW, a browser tab.
+	 * The captured audio is never replayed; it only feeds the spectrum.
+	 */
+	async function startSystemAudio() {
+		errorMessage = '';
+		const engine = audioEngine;
+		if (!engine) return;
+
+		const media = navigator.mediaDevices as MediaDevices | undefined;
+		if (!media?.getDisplayMedia) {
+			errorMessage = 'This browser cannot capture system audio. Try Chrome on desktop.';
+			return;
+		}
+
+		try {
+			// A video track is usually required to obtain an audio track from a
+			// display capture; it is ignored here.
+			const stream = await media.getDisplayMedia({ video: true, audio: true });
+			if (stream.getAudioTracks().length === 0) {
+				for (const track of stream.getTracks()) track.stop();
+				errorMessage =
+					'No audio was shared. Pick a screen or window and tick “Share system audio”.';
+				return;
+			}
+			engine.attachStream(stream, 'System audio');
+			audioLive = true;
+			audioLiveName = 'System audio';
+			audioPlaying = false;
+		} catch {
+			// The user cancelled the picker, or the browser denied capture.
+		}
+	}
+
+	async function startMicrophone() {
+		errorMessage = '';
+		const engine = audioEngine;
+		if (!engine) return;
+
+		const media = navigator.mediaDevices as MediaDevices | undefined;
+		if (!media?.getUserMedia) {
+			errorMessage = 'This browser cannot reach a microphone.';
+			return;
+		}
+
+		try {
+			const stream = await media.getUserMedia({ audio: true });
+			engine.attachStream(stream, 'Microphone');
+			audioLive = true;
+			audioLiveName = 'Microphone';
+			audioPlaying = false;
+		} catch {
+			errorMessage = 'Microphone access was blocked.';
+		}
+	}
+
+	function stopLive() {
+		if (!audioLive && !audioEngine?.isLive) {
+			audioLive = false;
+			return;
+		}
+		audioEngine?.detachStream();
+		audioLive = false;
+		audioLiveName = '';
+		audioPlaying = false;
 	}
 
 	function resampleNow() {
@@ -594,7 +668,42 @@
 					<span class="upload-plus" aria-hidden="true">{audioLoaded ? '↺' : '+'}</span>
 				</button>
 
-				{#if audioLoaded}
+				<div class="audio-source" role="group" aria-label="Live input">
+					<button
+						type="button"
+						class:active={audioLive && audioLiveName === 'System audio'}
+						aria-pressed={audioLive && audioLiveName === 'System audio'}
+						onclick={startSystemAudio}
+					>
+						System audio
+					</button>
+					<button
+						type="button"
+						class:active={audioLive && audioLiveName === 'Microphone'}
+						aria-pressed={audioLive && audioLiveName === 'Microphone'}
+						onclick={startMicrophone}
+					>
+						Microphone
+					</button>
+				</div>
+				<p class="audio-hint">
+					System audio follows whatever the machine plays — Spotify, a DAW, another tab. It is
+					analysed only and never replayed through the speakers.
+				</p>
+
+				{#if audioLive}
+					<div class="audio-meta">
+						<span class="filename">{audioLiveName}</span>
+						<span class="dims">live</span>
+					</div>
+					<div class="audio-transport">
+						<button type="button" onclick={stopLive} aria-label="Stop live input">
+							<span>Stop</span>
+							<span aria-hidden="true">■</span>
+						</button>
+						<span class="audio-time">listening</span>
+					</div>
+				{:else if audioLoaded}
 					<div class="audio-meta">
 						<span class="filename" title={audioName}>{audioName}</span>
 						<span class="dims">{fmtTime(audioDuration)}</span>
@@ -625,8 +734,8 @@
 					</label>
 				{:else}
 					<p class="empty-copy">
-						The image stands still until you play. Add a track and its spectrum opens the motion —
-						decoded locally, never uploaded.
+						The image stands still until sound arrives. Add a track, capture system audio, or open
+						the microphone — the spectrum opens the motion.
 					</p>
 				{/if}
 
@@ -1470,6 +1579,52 @@
 	}
 	.audio-axis span:last-child {
 		text-align: right;
+	}
+	.audio-toggle {
+		display: grid;
+		grid-template-columns: repeat(3, 1fr);
+		border: 1px solid var(--ink);
+	}
+	.audio-source {
+		display: grid;
+		grid-template-columns: 1fr 1fr;
+		margin-top: 6px;
+		border: 1px solid var(--ink);
+	}
+	.audio-source button {
+		padding: 7px 0;
+		border: 0;
+		background: transparent;
+		color: var(--muted);
+		font-family: var(--mono);
+		font-size: 7px;
+		letter-spacing: 0.03em;
+		text-transform: uppercase;
+		transition:
+			background 120ms ease,
+			color 120ms ease;
+	}
+	.audio-source button + button {
+		border-left: 1px solid var(--line-strong);
+	}
+	.audio-source button:disabled {
+		opacity: 0.3;
+		cursor: not-allowed;
+	}
+	.audio-source button:hover:not(:disabled) {
+		color: var(--ink);
+	}
+	.audio-source button.active {
+		background: var(--ink);
+		color: var(--paper);
+	}
+	.audio-hint {
+		margin: 6px 0 10px;
+		font-family: var(--mono);
+		font-size: 7px;
+		line-height: 1.6;
+		text-transform: uppercase;
+		color: var(--muted);
 	}
 	.audio-toggle {
 		display: grid;
