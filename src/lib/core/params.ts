@@ -18,7 +18,13 @@ export type LfoTarget =
 	| 'fracture'
 	| 'depth'
 	| 'size'
-	| 'opacity';
+	| 'opacity'
+	| 'photoParticles'
+	| 'photoBreak'
+	| 'photoRefraction'
+	| 'photoFolds'
+	| 'photoBlocks'
+	| 'photoChroma';
 
 export type LfoShape = 'sine' | 'triangle' | 'ramp' | 'random';
 
@@ -36,7 +42,13 @@ export function neutralModulation(): Modulation {
 		fracture: 1,
 		depth: 1,
 		size: 1,
-		opacity: 1
+		opacity: 1,
+		photoParticles: 1,
+		photoBreak: 1,
+		photoRefraction: 1,
+		photoFolds: 1,
+		photoBlocks: 1,
+		photoChroma: 1
 	};
 }
 

@@ -4,6 +4,7 @@ import type { FormSettings, Modulation, PhotoSettings, SimParams } from '#lib/co
 import type { AudioFrame } from '#lib/audio/types';
 import type { DecodedImage } from '#lib/image/decode';
 import type { NormalField } from './normals';
+import { modulatePhotoValue } from '#lib/core/photo-modulation';
 import { renderFragmentShader, renderVertexShader } from './shaders/render';
 import { photoFragmentShader, photoVertexShader } from './shaders/photo';
 
@@ -303,19 +304,23 @@ export class ParticleView {
 	): void {
 		const photo = this.photo;
 		const showPhoto = !!this.photoTexture && photo.enabled;
+		const photoParticles = showPhoto
+			? modulatePhotoValue(photo.particles, modulation.photoParticles, audioResponse)
+			: 1;
 		this.photoMesh.visible = showPhoto;
 		if (showPhoto) {
 			const u = this.photoMaterial.uniforms;
 			u.uTime.value = time;
-			u.uStrength.value = clamp01(photo.amount) * clamp01(audioResponse);
-			u.uRefraction.value = clamp01(photo.refraction);
-			u.uFolds.value = clamp01(photo.folds);
-			u.uBlocks.value = clamp01(photo.blocks);
-			u.uChroma.value = clamp01(photo.chroma);
+			u.uStrength.value = modulatePhotoValue(photo.amount, modulation.photoBreak, audioResponse)
+				* clamp01(audioResponse);
+			u.uRefraction.value = modulatePhotoValue(photo.refraction, modulation.photoRefraction, audioResponse);
+			u.uFolds.value = modulatePhotoValue(photo.folds, modulation.photoFolds, audioResponse);
+			u.uBlocks.value = modulatePhotoValue(photo.blocks, modulation.photoBlocks, audioResponse);
+			u.uChroma.value = modulatePhotoValue(photo.chroma, modulation.photoChroma, audioResponse);
 			u.uBass.value = clamp01(audio.bass);
 			u.uTreble.value = clamp01(audio.treble);
 			u.uBeat.value = clamp01(audio.beat);
-			u.uOpacity.value = 1 - clamp01(photo.particles);
+			u.uOpacity.value = 1 - photoParticles;
 		}
 		if (this.points) {
 			this.points.visible = positionTexture !== null;
@@ -327,7 +332,7 @@ export class ParticleView {
 			u.uTime.value = time;
 			u.uPointSize.value = this.pointSize * modulation.size * (1 + amp * 0.32);
 			u.uOpacity.value = Math.min(1.15, this.opacity * modulation.opacity * (1 + amp * 0.16))
-				* (showPhoto ? clamp01(photo.particles) : 1);
+				* photoParticles;
 
 			// The image surface opens only while sound is present. The gate is
 			// the same `motion` value the simulation uses, so optics and

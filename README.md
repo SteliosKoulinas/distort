@@ -69,7 +69,7 @@ Requirements: a browser with WebGL2 and render-to-float support (`EXT_color_buff
 - **Pulse** (`Space`) fires a radial impulse. **Auto pulse** is a metronome for when no audio is playing; live bass onsets also feed the same `beat` envelope.
 - Move the pointer over the stage to attract, repel, or swirl.
 - Choose a **Grade** — Auto, Source, Bone, Ember, Ice or Rose — and set amount/chroma. Grading is a live shader uniform; it never resamples.
-- Open **Modulation** to run four LFOs. Each route has a target, shape, rate, depth, on/off and a retrigger button (`↻`). A small scope draws the selected shape, the depth-scaled wave and a live playhead, so rate and depth are visible while the route runs.
+- Open **Modulation** to run four LFOs. Each route has a target, shape, rate, depth, on/off and a retrigger button (`↻`). Alongside the original particle targets, every numeric **Image / optics** control is a target: Particles mix, Break, Refraction, Folds, Blocks and Chromatic split. A small scope draws the selected shape, the depth-scaled wave and a live playhead.
 - **Randomize look** samples a new world; the dice button only changes the seed.
 - Switch the **Look** between Light and Dark in the masthead. It inverts only the paper and ink around the stage; the stage itself stays black, and the choice is remembered in `localStorage`.
 
@@ -158,6 +158,7 @@ src/
   lib/
     core/params.ts        SimParams, presets, randomize, LFO settings
     core/lfo.ts           LFO shapes, signal function, seeded random tables
+    core/photo-modulation.ts   audio-gated 0..1 image-optics LFO multipliers
     core/color.ts         sRGB/linear/hex/HSL helpers
     core/palette.ts       auto + curated two-stop grades, percentile levels
     core/rng.ts           mulberry32 + seed helpers
@@ -436,7 +437,7 @@ signal = shape(phase) · depth · env
 factor[target] *= max(0, 1 + signal)
 ```
 
-Shapes are sine, triangle, ramp and a periodic smooth random: 16 seeded values per route, interpolated with `smoothstep` and wrapped, so it wanders rather than stepping like white noise. Retrigger sets `phase = 0`, `env = 0`; the route then swells back in. Targets multiply curl strength, noise scale, spring stiffness, pointer strength, pulse strength, wave strength, fracture pull, depth amount, point size or opacity. Several routes may share a target; the factors compose multiplicatively. Scale, size and opacity are clamped so a deep LFO cannot collapse the field.
+Shapes are sine, triangle, ramp and a periodic smooth random: 16 seeded values per route, interpolated with `smoothstep` and wrapped, so it wanders rather than stepping like white noise. Retrigger sets `phase = 0`, `env = 0`; the route then swells back in. The original targets multiply curl strength, noise scale, spring stiffness, pointer strength, pulse strength, wave strength, fracture pull, depth amount, point size or opacity. Six additional targets multiply the numeric **Image / optics** sliders: Particles, Break, Refraction, Folds, Blocks and Chromatic split. Several routes may share a target; the factors compose multiplicatively. All image values are clamped to 0..1, and their LFO factor is faded in by the same audio-response envelope as the full-image shader. Thus a silent photograph does not pulse from a Particles LFO, and a slider at 0 remains off rather than being awakened by modulation. The **Continuous image** switch remains an explicit on/off control.
 
 LFOs are preserved across presets and randomization, along with the palette, seed and particle count.
 
@@ -463,7 +464,7 @@ Presets reset the look but keep the user's **seed**, **particle count**, **palet
 ## Performance notes
 
 - Simulation cost is two fullscreen passes over a 448²–512² texture (≈ 200k–262k fragments each), regardless of point count. The expensive per-fragment work is the 6-sample curl and the 9-cell fracture search; both are branch-skipped when their strength is zero.
-- The only per-frame JavaScript is: read `dt`, decay the beat envelope, advance assembly/auto-pulse, advance four LFO phases and multiply ten factors, set ~40 uniforms, call two `renderer.render` calls plus the point draw. Our loop walks no arrays and allocates nothing; the LFO random tables are built once and Three.js keeps its own internal state.
+- The per-frame JavaScript reads `dt`, decays the beat envelope, advances assembly/auto-pulse and four LFO phases, resets and multiplies 16 scalar factors, then updates the simulation and image/point uniforms. The image is one additional draw in the same scene; no source pixels or particle arrays are traversed per frame. The LFO random tables are built once.
 - While audio plays, one extra `requestAnimationFrame` reads the analyser (`getByteFrequencyData`, 1024 bins), averages four bands, and writes five numbers into the field. It allocates nothing per frame; when the track pauses it stops and sends one silent frame. The spectrum canvas also runs on its own rAF, reading the same byte array.
 - Resampling (CDF + geometry rebuild) is the one main-thread spike and happens only on image change, preset change, seed change, or release of Count/Edge detail. Measured here: ≈ 63 ms at 200k and ≈ 92 ms at 262k for the sampling + geometry work (image analysis is a separate one-time pass on upload). The UI paints a loading state before that work starts.
 - Geometry memory at 200k: positions 2.4 MB, refs 1.6 MB, colors 2.4 MB, sizes/seeds 1.6 MB, plus ~25 MB of float render targets. 512² adds ~13 MB. Fine for a desktop tab.

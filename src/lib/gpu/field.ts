@@ -305,6 +305,12 @@ export class ParticleField {
 		mod.depth = 1;
 		mod.size = 1;
 		mod.opacity = 1;
+		mod.photoParticles = 1;
+		mod.photoBreak = 1;
+		mod.photoRefraction = 1;
+		mod.photoFolds = 1;
+		mod.photoBlocks = 1;
+		mod.photoChroma = 1;
 
 		const lfos = this.params.lfos;
 		for (let i = 0; i < lfos.length && i < this.lfoRuntime.length; i++) {

@@ -1613,6 +1613,14 @@
 								<option value="depth">Depth</option>
 								<option value="size">Size</option>
 								<option value="opacity">Opacity</option>
+								<optgroup label="Image / optics">
+									<option value="photoParticles">Particles mix</option>
+									<option value="photoBreak">Break</option>
+									<option value="photoRefraction">Refraction</option>
+									<option value="photoFolds">Folds</option>
+									<option value="photoBlocks">Blocks</option>
+									<option value="photoChroma">Chromatic split</option>
+								</optgroup>
 							</select>
 							<select
 								bind:value={params.lfos[index].shape}
@@ -1681,7 +1689,8 @@
 
 				<p class="lfo-hint">
 					Each route multiplies one parameter by <code>1 + signal × depth</code>. Retrigger restarts
-					the phase and swells the route back in; phases survive preset changes.
+					the phase and swells the route back in; phases survive preset changes. Image / optics
+					routes modulate while audio is present. A control at 0 stays off.
 				</p>
 			</Section>
 
