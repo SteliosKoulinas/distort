@@ -52,6 +52,7 @@ export class AudioEngine {
 	private context: AudioContext | null = null;
 	private analyser: AnalyserNode | null = null;
 	private outputGain: GainNode | null = null;
+	private recordDest: MediaStreamAudioDestinationNode | null = null;
 	private elementSource: MediaElementAudioSourceNode | null = null;
 	private streamSource: MediaStreamAudioSourceNode | null = null;
 	private stream: MediaStream | null = null;
@@ -108,6 +109,16 @@ export class AudioEngine {
 
 	setFrameSink(sink: ((frame: AudioFrame) => void) | null): void {
 		this.frameSink = sink;
+	}
+
+	/** Tap the selected file or live input before the monitor mute gain. */
+	getRecordStream(): MediaStream | null {
+		if (!this.context || !this.analyser || (!this.live && !this.objectUrl)) return null;
+		if (!this.recordDest) {
+			this.recordDest = this.context.createMediaStreamDestination();
+			this.analyser.connect(this.recordDest);
+		}
+		return this.recordDest.stream;
 	}
 
 	async load(file: File): Promise<AudioTrack> {
@@ -247,10 +258,13 @@ export class AudioEngine {
 		this.element.load();
 		this.elementSource?.disconnect();
 		this.analyser?.disconnect();
+		this.recordDest?.disconnect();
+		this.recordDest?.stream.getTracks().forEach((track) => track.stop());
 		void this.context?.close();
 		this.elementSource = null;
 		this.analyser = null;
 		this.outputGain = null;
+		this.recordDest = null;
 		this.context = null;
 		this.spectrumData = null;
 		this.frameSink = null;

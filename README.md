@@ -2,7 +2,7 @@
 
 An image dissolves into 200,000 GPU particles and reassembles. Fine dots on black, slow incompressible drift, a loose spring home, and a two-stop colour grade that keeps portraits coherent on a dark stage.
 
-Phase 1 is a complete, runnable WebGL piece: image decomposition → importance sampling → GPU particle simulation → additive point renderer → Svelte control panel. Phase 2 adds the audio path: a local track is analysed with an `AnalyserNode`, and its spectrum drives the same force field as plain numbers.
+The WebGL foundation turns an image into a particle field. Audio from a file or live input opens its motion, and image-anchored **Form** controls bend, cut and lift the photograph. **Export** records the canvas and selected audio into a video framed for Reel, portrait Post or Square.
 
 ---
 
@@ -18,6 +18,13 @@ Production (static, no server):
 ```bash
 npm run build      # writes build/
 npm run preview    # http://127.0.0.1:4180
+```
+
+Checks (Node 24+ for the native TypeScript recorder tests):
+
+```bash
+npm run check
+npm test
 ```
 
 Deploy the `build/` directory to any static host (Netlify, Vercel, Cloudflare Pages, GitHub Pages, S3). `adapter-static` is configured with an `index.html` fallback, so client-side routing will work if routes are added later.
@@ -54,6 +61,8 @@ Requirements: a browser with WebGL2 and render-to-float support (`EXT_color_buff
 - Drop an audio file on the stage, or open **Audio** and click **Choose audio**. The image stays still until you press **Play**; then the spectrum opens the motion and the piece breathes with the track. The file is decoded locally and never uploaded.
 - Or point the field at anything already playing: **System audio** captures the machine's output (Spotify, a DAW, a video, another tab) and **Microphone** captures the room. A captured stream is analysed and muted, never replayed through the speakers.
 - Set **Motion** to decide how far the image opens while audio plays (0 keeps it near the source). **Spectrum** trims the spectral forces themselves.
+- Open **Form** for Lens, Raster, Slices and Relief. Their offsets follow the source image and the same audio-led Motion envelope.
+- Choose **Export → Reel / Post / Square**, choose a take length, then **Record take**. Keep the tab visible. **Stop and keep** finishes early; a completed take downloads automatically and remains available through **Download**.
 - Pick a preset: **Drift**, **Ash**, **Undertow**, **Shatter**, **Still**.
 - **Reassemble** (`R`) pulls the cloud home, then releases it.
 - **Pulse** (`Space`) fires a radial impulse. **Auto pulse** is a metronome for when no audio is playing; live bass onsets also feed the same `beat` envelope.
@@ -69,6 +78,43 @@ The interface is set like a printed index: warm paper, black ink, hairline rules
 - Every slider is live. The two expensive controls — **Count** and **Edge detail** — resample only on release.
 
 Measured on an Apple M2 (ANGLE/Metal, Chromium): **262,144 particles at 100 FPS**, 512² simulation texture, float32, no console errors. That is a local result, not a promise about integrated GPUs; the Count slider and the lower-density presets are the fallback.
+
+---
+
+## Form — the image as a surface
+
+The source analysis is baked once into a small RGBA normal/relief map (512 px on the long edge). Its signed Sobel gradient follows the photograph's contours; luminance supplies depth and edge magnitude supplies local detail. Each point retains its source colour and source coordinates.
+
+| Control | Treatment | Audio emphasis |
+| --- | --- | --- |
+| Lens | Bounded refraction along the local image gradient | Bass |
+| Raster | Fixed source cells drift as small panes; their membership stays stable | Treble |
+| Slices | Source-aligned horizontal strips shift sideways | Beat |
+| Relief | Luminance lifts bright structure into shallow parallax | Loudness |
+
+All four strengths share **Motion**. Silence retains only the small breathing floor; sound opens the surface. Turning **Image surface** off removes these optical offsets while retaining the existing simulation, pointer, Pulse and LFO controls. Presets include their own Form settings; the global Motion slider is preserved between presets.
+
+## Video export
+
+| Frame | Dimensions | Aspect | Target video bitrate |
+| --- | --- | --- | --- |
+| Reel | 1080 × 1920 | 9:16 | 17.4 Mbps |
+| Post | 1080 × 1350 | 4:5 | 12.2 Mbps |
+| Square | 1080 × 1080 | 1:1 | 9.8 Mbps |
+
+These are delivery presets, not promises about Instagram placement: Instagram may present uploaded videos as Reels. The full source image is fitted within the chosen frame, so a source with a different aspect has black margins. The selected frame previews at the actual delivery resolution; only the canvas is exported, without controls, HUD or tick marks.
+
+**Encoding.** WebCodecs targets H.264 High (Main/Baseline fallback), an explicit **30 fps** timeline, fast-start MP4 via `mp4-muxer`, and **AAC 192 kbps stereo** when audio is selected. Frames are captured immediately after the WebGL draw. Missed display frames hold the previous image rather than speeding up the video; sustained rendering/encoding stalls report an error. The bitrate is a quality target, not a fixed file-size guarantee.
+
+If WebCodecs, AAC or audio-track processing is unavailable, the browser's `MediaRecorder` is used. Its actual codec/frame cadence depend on the browser. MP4 is preferred; WebM-only browsers clearly label the result, which needs conversion to H.264 MP4 before uploading to Instagram.
+
+**Audio and takes.** A file take restarts playback from zero. **Track** uses its duration up to **180 seconds**; without a file (or with live input), it records 12 seconds. The other lengths are 15, 30 and 60 seconds. File and live audio are tapped before the monitor mute gain, so recording a microphone/system input does not replay it through the speakers. Without an audio source, the export has no audio track. Each recorder owns cloned audio tracks so stopping one take leaves the analyser and the next take intact.
+
+The tab must remain visible; hiding it interrupts the take instead of exporting a frozen visual. Encoding and finalisation happen locally, with the video held in memory until download. On slower hardware, lower the particle count.
+
+**Instagram quality.** Instagram always re-encodes; no export setting can guarantee zero compression loss, especially for moving fine particles. Upload the exported file directly and enable **Upload at highest quality** in Instagram. Exact 1080-wide framing and generous source bitrates avoid an unnecessary resize or low-quality first encode. Approximate target sizes for 30 seconds including AAC are **66 MB / 46 MB / 37 MB**, respectively; actual sizes vary with the image and encoder.
+
+**Verification.** Local Chromium checks decoded Reel/Post/Square MP4s, confirmed 90 video samples for a 3-second take (30 fps), H.264 + audible stereo AAC, and `moov` before `mdat`. Silent recording and two consecutive MediaRecorder/audio takes also decoded successfully. `npm test` covers high-refresh-rate timing, held frames, asynchronous encoder errors and long stalls. Browser availability and performance still vary by platform.
 
 ---
 
@@ -115,10 +161,13 @@ src/
     gpu/shaders/simulation.ts   velocity/position/init GLSL + force modules
     gpu/shaders/noise.ts  3D simplex noise, hashes, divergence-free curl
     gpu/shaders/render.ts  point vertex/fragment shaders + palette grade
+    gpu/normals.ts         baked source gradient, luminance and edge texture
     gpu/view.ts            Three.js renderer, geometry, letterbox fit, DPR cap
     gpu/field.ts           loop, pointer, beat, audio, LFO runtime, stats
     audio/types.ts         AudioFrame { bass, mid, treble, amp, beat }
     audio/engine.ts        file element + live MediaStream → AnalyserNode, bands, onset beat
+    export/formats.ts      Reel/Post/Square sizes, bitrates and size estimates
+    export/recorder.ts     WebCodecs H.264/AAC + MP4 muxer, MediaRecorder fallback
     ui/*.svelte            Section, Slider, Toggle, LfoScope, AudioScope
 ```
 
@@ -361,7 +410,7 @@ Pointer and Pulse are deliberately **not** gated: they are manual gestures, so t
 
 `src/lib/ui/AudioScope.svelte` draws log-spaced bars from `engine.spectrum` with hairline dividers at 160 Hz and 2 kHz, labelled **Bass / Mid / Treble** below. It re-reads `--ink`/`--line` when the look changes, like the rest of the instrument.
 
-Uploads stay local: the track is decoded from an object URL, never sent anywhere, and the URL is revoked when the track is replaced or the page unmounts. Microphone input and streaming services are not wired yet; both can reuse the same `AudioFrame` seam.
+Uploads stay local: the track is decoded from an object URL, never sent anywhere, and the URL is revoked when the track is replaced or the page unmounts. File and live sources share the same `AudioFrame` seam and recording tap.
 
 ---
 
@@ -421,7 +470,7 @@ Presets reset the look but keep the user's **seed**, **particle count**, **palet
 
 **Phase 2 — live input.** Microphone and system-audio capture through the same analyser, analysed and muted. Still open: gain trim, per-band influence, a spectral-flux onset detector, and a small on-screen note about the browser's screen-sharing indicator. Streaming *services* cannot be tapped directly (DRM) — system capture is the route, and it already works.
 
-**Phase 3 — polish and editioning.** URL-encoded presets and seeds, PNG/WebM export, still-frame capture at 2× DPR, keyboard-focusable canvas controls, reduced-motion behavior, and a mobile-specific layout pass. Optional: image sequences or short video as the source.
+**Phase 3 — Form + video export.** Image-anchored Lens/Raster/Slices/Relief, delivery-framed previews, H.264/AAC MP4 recording and browser fallback. Further polish: URL-encoded presets and seeds, PNG still capture, keyboard-focusable canvas controls and reduced-motion behavior. Optional: image sequences or short video as the source.
 
 **Phase 4 — research, only if it earns its cost.** True Voronoi/SPH neighbors on the GPU, depth of field in the point shader, audio fingerprint-driven presets, or a compute-shader path via WebGPU with the WebGL2 renderer as fallback.
 

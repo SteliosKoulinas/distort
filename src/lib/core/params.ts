@@ -59,6 +59,31 @@ export interface PaletteSettings {
 }
 
 /**
+ * How the photograph is treated as a surface.
+ *
+ * These are not forces: the dots stay in their own part of the picture. Each
+ * one bends, cuts or lifts the image in its own coordinates, which is what
+ * keeps a face readable while it moves. All four are gated by the same Motion
+ * envelope as the physics, and each answers a different band:
+ *
+ *   lens   ← bass      contours slide along their own gradient
+ *   raster ← treble    the image splits into its own cells
+ *   slice  ← beat      horizontal bands lift sideways
+ *   relief ← amp       bright structure rises toward the viewer
+ */
+export interface FormSettings {
+	enabled: boolean;
+	/** 0..1. Refraction along the luminance gradient. */
+	lens: number;
+	/** 0..1. Cell deconstruction, anchored to source coordinates. */
+	raster: number;
+	/** 0..1. Horizontal band displacement. */
+	slice: number;
+	/** 0..1. Depth lift from luminance. */
+	relief: number;
+}
+
+/**
  * Audio settings. `motion` is the master gate: it decides how far the image
  * opens while a track plays. With no audio the field stays close to the
  * source, so the piece reads as a quiet photograph; pressing play starts the
@@ -115,6 +140,9 @@ export interface SimParams {
 
 	/** Two-stop per-particle grade. Does not require a resample. */
 	palette: PaletteSettings;
+
+	/** Image-anchored optics. Does not require a resample. */
+	form: FormSettings;
 
 	/** Four user LFOs. Phases live in ParticleField, not in this snapshot. */
 	lfos: LfoSettings[];
@@ -181,6 +209,14 @@ const drift: SimParams = {
 		chroma: 0.86
 	},
 
+	form: {
+		enabled: true,
+		lens: 0.55,
+		raster: 0.16,
+		slice: 0.1,
+		relief: 0.4
+	},
+
 	lfos: [
 		{ enabled: true, target: 'curl', shape: 'sine', rate: 0.07, depth: 0.35 },
 		{ enabled: true, target: 'depth', shape: 'triangle', rate: 0.11, depth: 0.45 },
@@ -205,6 +241,7 @@ export function createDefaultParams(): SimParams {
 	return {
 		...drift,
 		palette: { ...drift.palette },
+		form: { ...drift.form },
 		lfos: drift.lfos.map((lfo) => ({ ...lfo })),
 		audio: { ...drift.audio }
 	};
@@ -232,7 +269,8 @@ export const PRESETS: Preset[] = [
 			pointerStrength: 1.4,
 			pulseStrength: 2.2,
 			depthStrength: 0.35,
-			edgeBoost: 1.4
+			edgeBoost: 1.4,
+			form: { enabled: true, lens: 1, raster: 0.1, slice: 0.05, relief: 0.3 }
 		}
 	},
 	{
@@ -256,7 +294,8 @@ export const PRESETS: Preset[] = [
 			waveFrequency: 6,
 			waveSpeed: 2.0,
 			depthStrength: 0.4,
-			edgeBoost: 1.25
+			edgeBoost: 1.25,
+			form: { enabled: true, lens: 0.5, raster: 0.22, slice: 0.14, relief: 0.5 }
 		}
 	},
 	{
@@ -276,7 +315,8 @@ export const PRESETS: Preset[] = [
 			fractureScale: 9,
 			fractureSpread: 0.35,
 			depthStrength: 0.3,
-			edgeBoost: 1.5
+			edgeBoost: 1.5,
+			form: { enabled: true, lens: 0.25, raster: 0.72, slice: 0.5, relief: 0.28 }
 		}
 	},
 	{
@@ -292,7 +332,8 @@ export const PRESETS: Preset[] = [
 			pointerStrength: 0.9,
 			pulseStrength: 1.6,
 			depthEnabled: false,
-			edgeBoost: 1.15
+			edgeBoost: 1.15,
+			form: { enabled: true, lens: 0.3, raster: 0, slice: 0, relief: 0.22 }
 		}
 	}
 ];
@@ -310,6 +351,7 @@ export function applyPreset(base: SimParams, preset: Preset): SimParams {
 		seed: base.seed,
 		particleCount: base.particleCount,
 		palette: { ...base.palette },
+		form: { ...(preset.params.form ?? defaults.form) },
 		lfos: base.lfos.map((lfo) => ({ ...lfo })),
 		audio: { ...base.audio }
 	};
@@ -346,6 +388,13 @@ export function randomizeLook(base: SimParams, rand: () => number): SimParams {
 			...base.palette,
 			amount: between(0.7, 1),
 			chroma: between(0.62, 1)
+		},
+		form: {
+			enabled: true,
+			lens: between(0.25, 1),
+			raster: rand() > 0.5 ? between(0.05, 0.6) : 0,
+			slice: rand() > 0.6 ? between(0.05, 0.45) : 0,
+			relief: between(0.15, 0.65)
 		},
 		edgeBoost: between(0.8, 2.4)
 	};
