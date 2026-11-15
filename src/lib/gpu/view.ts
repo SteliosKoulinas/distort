@@ -1,9 +1,11 @@
 import * as THREE from 'three';
 import type { SampledParticles } from '#lib/image/sample';
-import type { FormSettings, Modulation, SimParams } from '#lib/core/params';
+import type { FormSettings, Modulation, PhotoSettings, SimParams } from '#lib/core/params';
 import type { AudioFrame } from '#lib/audio/types';
+import type { DecodedImage } from '#lib/image/decode';
 import type { NormalField } from './normals';
 import { renderFragmentShader, renderVertexShader } from './shaders/render';
+import { photoFragmentShader, photoVertexShader } from './shaders/photo';
 
 const MAX_DPR = 1.5;
 
@@ -23,6 +25,9 @@ export class ParticleView {
 	private readonly scene = new THREE.Scene();
 	private readonly camera: THREE.OrthographicCamera;
 	private readonly material: THREE.ShaderMaterial;
+	private readonly photoMaterial: THREE.ShaderMaterial;
+	private readonly photoMesh: THREE.Mesh;
+	private photoTexture: THREE.DataTexture | null = null;
 	private points: THREE.Points | null = null;
 	private stageWidth = 1;
 	private stageHeight = 1;
@@ -38,6 +43,10 @@ export class ParticleView {
 		raster: 0.18,
 		slice: 0.12,
 		relief: 0.35
+	};
+	private photo: PhotoSettings = {
+		enabled: true, particles: 0.12, amount: 0.32,
+		refraction: 0.65, folds: 0.4, blocks: 0.28, chroma: 0.3
 	};
 	/** Delivery size override. While set, the canvas renders at exactly this. */
 	private exportSize: { width: number; height: number } | null = null;
@@ -74,6 +83,36 @@ export class ParticleView {
 		this.normalTexture.wrapT = THREE.ClampToEdgeWrapping;
 		this.normalTexture.colorSpace = THREE.NoColorSpace;
 		this.normalTexture.needsUpdate = true;
+
+		this.photoMaterial = new THREE.ShaderMaterial({
+			uniforms: {
+				uImage: { value: null },
+				uNormals: { value: this.normalTexture },
+				uFit: { value: this.fit },
+				uTime: { value: 0 },
+				uStrength: { value: 0 },
+				uRefraction: { value: 0 },
+				uFolds: { value: 0 },
+				uBlocks: { value: 0 },
+				uChroma: { value: 0 },
+				uBass: { value: 0 },
+				uTreble: { value: 0 },
+				uBeat: { value: 0 },
+				uOpacity: { value: 1 },
+				uImageSize: { value: new THREE.Vector2(1, 1) }
+			},
+			vertexShader: photoVertexShader,
+			fragmentShader: photoFragmentShader,
+			transparent: true,
+			depthTest: false,
+			depthWrite: false,
+			toneMapped: false
+		});
+		this.photoMesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.photoMaterial);
+		this.photoMesh.visible = false;
+		this.photoMesh.renderOrder = -1;
+		this.photoMesh.frustumCulled = false;
+		this.scene.add(this.photoMesh);
 
 		this.material = new THREE.ShaderMaterial({
 			uniforms: {
@@ -144,8 +183,34 @@ export class ParticleView {
 		geometry.setDrawRange(0, count);
 
 		this.points = new THREE.Points(geometry, this.material);
+		this.points.renderOrder = 1;
 		this.points.frustumCulled = false;
 		this.scene.add(this.points);
+	}
+
+	/** Upload the decoded source once, preserving every pixel for image-space effects. */
+	setPhoto(image: DecodedImage): void {
+		const { width, height, imageData } = image;
+		const rowBytes = width * 4;
+		const pixels = new Uint8Array(imageData.data.length);
+		// DataTexture's first byte row is the bottom row in WebGL. ImageData's
+		// first byte row is the top, so invert on upload (not in the shader).
+		for (let y = 0; y < height; y++) {
+			pixels.set(imageData.data.subarray(y * rowBytes, (y + 1) * rowBytes), (height - y - 1) * rowBytes);
+		}
+		const texture = new THREE.DataTexture(pixels, width, height, THREE.RGBAFormat, THREE.UnsignedByteType);
+		texture.minFilter = THREE.LinearFilter;
+		texture.magFilter = THREE.LinearFilter;
+		texture.generateMipmaps = false;
+		texture.wrapS = THREE.ClampToEdgeWrapping;
+		texture.wrapT = THREE.ClampToEdgeWrapping;
+		texture.colorSpace = THREE.NoColorSpace; // shader outputs source sRGB bytes directly
+		texture.needsUpdate = true;
+		this.photoTexture?.dispose();
+		this.photoTexture = texture;
+		this.photoMaterial.uniforms.uImage.value = texture;
+		this.photoMaterial.uniforms.uImageSize.value.set(width, height);
+		this.photoMesh.visible = this.photo.enabled;
 	}
 
 	/** The source's own relief. Rebuilt only when a new image is loaded. */
@@ -168,6 +233,7 @@ export class ParticleView {
 		const previous = this.normalTexture;
 		this.normalTexture = texture;
 		this.material.uniforms.uNormals.value = texture;
+		this.photoMaterial.uniforms.uNormals.value = texture;
 		previous.dispose();
 	}
 
@@ -175,6 +241,7 @@ export class ParticleView {
 		this.pointSize = params.pointSize;
 		this.opacity = params.opacity;
 		this.form = { ...params.form };
+		this.photo = { ...params.photo };
 		this.material.uniforms.uPointSize.value = params.pointSize;
 		this.material.uniforms.uOpacity.value = params.opacity;
 	}
@@ -231,8 +298,25 @@ export class ParticleView {
 		time: number,
 		modulation: Modulation,
 		audio: AudioFrame,
-		motion: number
+		motion: number,
+		audioResponse: number
 	): void {
+		const photo = this.photo;
+		const showPhoto = !!this.photoTexture && photo.enabled;
+		this.photoMesh.visible = showPhoto;
+		if (showPhoto) {
+			const u = this.photoMaterial.uniforms;
+			u.uTime.value = time;
+			u.uStrength.value = clamp01(photo.amount) * clamp01(audioResponse);
+			u.uRefraction.value = clamp01(photo.refraction);
+			u.uFolds.value = clamp01(photo.folds);
+			u.uBlocks.value = clamp01(photo.blocks);
+			u.uChroma.value = clamp01(photo.chroma);
+			u.uBass.value = clamp01(audio.bass);
+			u.uTreble.value = clamp01(audio.treble);
+			u.uBeat.value = clamp01(audio.beat);
+			u.uOpacity.value = 1 - clamp01(photo.particles);
+		}
 		if (this.points) {
 			this.points.visible = positionTexture !== null;
 			const u = this.material.uniforms;
@@ -242,7 +326,8 @@ export class ParticleView {
 			u.uPosition.value = positionTexture;
 			u.uTime.value = time;
 			u.uPointSize.value = this.pointSize * modulation.size * (1 + amp * 0.32);
-			u.uOpacity.value = Math.min(1.15, this.opacity * modulation.opacity * (1 + amp * 0.16));
+			u.uOpacity.value = Math.min(1.15, this.opacity * modulation.opacity * (1 + amp * 0.16))
+				* (showPhoto ? clamp01(photo.particles) : 1);
 
 			// The image surface opens only while sound is present. The gate is
 			// the same `motion` value the simulation uses, so optics and
@@ -263,6 +348,9 @@ export class ParticleView {
 	dispose(): void {
 		this.disposePoints();
 		this.normalTexture.dispose();
+		this.photoTexture?.dispose();
+		this.photoMesh.geometry.dispose();
+		this.photoMaterial.dispose();
 		this.material.dispose();
 		this.renderer.dispose();
 	}

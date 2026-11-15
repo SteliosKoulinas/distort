@@ -158,6 +158,7 @@ export class ParticleField {
 		// The surface is a property of the photograph: build it once, here,
 		// not on every resample.
 		this.view.setNormals(buildNormalField(analysis));
+		this.view.setPhoto(image);
 		this.build();
 		this.start();
 	}
@@ -345,6 +346,11 @@ export class ParticleField {
 		this.audioEnergy += (amp - this.audioEnergy) * follow;
 		const gate = audio && audio.reactive ? audio.motion : 0;
 		const motion = this.idleMotion + (1 - this.idleMotion) * gate * this.audioEnergy;
+		// Photo optics have a separate normalized response: quiet playing audio
+		// can fully open them at max, while actual silence remains unchanged.
+		const audioResponse = audio.reactive
+			? Math.max(0, Math.min(1, (this.audioEnergy - 0.015) * 8)) * audio.motion
+			: 0;
 
 		if (this.params.autoPulse && this.params.pulseEnabled) {
 			this.autoPulseClock += dt;
@@ -377,7 +383,7 @@ export class ParticleField {
 					motion,
 					this.assembly
 				);
-				this.view.render(this.sim.positionTexture, this.time, this.modulation, this.audio, motion);
+				this.view.render(this.sim.positionTexture, this.time, this.modulation, this.audio, motion, audioResponse);
 				this.frameHook?.(this.canvas);
 			}
 		} catch (error) {

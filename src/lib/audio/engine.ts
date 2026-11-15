@@ -153,16 +153,28 @@ export class AudioEngine {
 		return { name: file.name, duration: this.duration };
 	}
 
-	async play(): Promise<void> {
+	/** Resume the audio context synchronously inside the Record button gesture. */
+	activate(): void {
+		if (this.disposed) return;
+		this.ensureContext();
+		if (this.context?.state === 'suspended') void this.context.resume();
+	}
+
+	async play(signal?: AbortSignal): Promise<void> {
 		if (this.disposed || this.live) return;
 		this.ensureContext();
 		if (this.context?.state === 'suspended') await this.context.resume();
+		if (signal?.aborted) throw new Error('Audio playback was cancelled.');
 		if (this.duration > 0 && this.element.currentTime >= this.duration - 0.01) {
 			this.element.currentTime = 0;
 		}
 
 		this.connectElement(true);
 		await this.element.play();
+		if (signal?.aborted) {
+			this.element.pause();
+			throw new Error('Audio playback was cancelled.');
+		}
 		this.playing = true;
 		this.startMetering();
 	}

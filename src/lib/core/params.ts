@@ -83,6 +83,23 @@ export interface FormSettings {
 	relief: number;
 }
 
+/** Continuous photograph underneath the particles; no dot reconstruction needed. */
+export interface PhotoSettings {
+	enabled: boolean;
+	/** 0 = photograph alone, 1 = original particle-only rendering. */
+	particles: number;
+	/** Master optical destruction, 0..1. At 1 the effects can erase legibility. */
+	amount: number;
+	/** Contour-following refraction / fluid glass. */
+	refraction: number;
+	/** Displaced horizontal strips. */
+	folds: number;
+	/** Image block breakup and pixelation. */
+	blocks: number;
+	/** RGB channel separation. */
+	chroma: number;
+}
+
 /**
  * Audio settings. `motion` is the master gate: it decides how far the image
  * opens while a track plays. With no audio the field stays close to the
@@ -143,6 +160,9 @@ export interface SimParams {
 
 	/** Image-anchored optics. Does not require a resample. */
 	form: FormSettings;
+
+	/** Full-resolution image-space treatment, rendered before the point field. */
+	photo: PhotoSettings;
 
 	/** Four user LFOs. Phases live in ParticleField, not in this snapshot. */
 	lfos: LfoSettings[];
@@ -216,6 +236,15 @@ const drift: SimParams = {
 		slice: 0.1,
 		relief: 0.4
 	},
+	photo: {
+		enabled: true,
+		particles: 0.12,
+		amount: 0.32,
+		refraction: 0.65,
+		folds: 0.4,
+		blocks: 0.28,
+		chroma: 0.3
+	},
 
 	lfos: [
 		{ enabled: true, target: 'curl', shape: 'sine', rate: 0.07, depth: 0.35 },
@@ -242,6 +271,7 @@ export function createDefaultParams(): SimParams {
 		...drift,
 		palette: { ...drift.palette },
 		form: { ...drift.form },
+		photo: { ...drift.photo },
 		lfos: drift.lfos.map((lfo) => ({ ...lfo })),
 		audio: { ...drift.audio }
 	};
@@ -352,6 +382,7 @@ export function applyPreset(base: SimParams, preset: Preset): SimParams {
 		particleCount: base.particleCount,
 		palette: { ...base.palette },
 		form: { ...(preset.params.form ?? defaults.form) },
+		photo: { ...base.photo },
 		lfos: base.lfos.map((lfo) => ({ ...lfo })),
 		audio: { ...base.audio }
 	};
@@ -396,6 +427,7 @@ export function randomizeLook(base: SimParams, rand: () => number): SimParams {
 			slice: rand() > 0.6 ? between(0.05, 0.45) : 0,
 			relief: between(0.15, 0.65)
 		},
+		photo: { ...base.photo },
 		edgeBoost: between(0.8, 2.4)
 	};
 }

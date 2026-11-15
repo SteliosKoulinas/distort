@@ -91,3 +91,15 @@ test('long rendering stalls fail explicitly instead of silently exporting broken
 	assert.throws(() => recorder.pushFrame(h.options.canvas), /fell behind/);
 	recorder.abort();
 });
+
+test('a 60-second take is not capped at 30 seconds', async (t) => {
+	const h = harness(t);
+	const recorder = await FrameRecorder.create({ ...h.options, duration: 60 });
+	for (let ms = 0; ms < 60_000; ms += 25) {
+		h.at(ms);
+		recorder.pushFrame(h.options.canvas);
+	}
+	assert.equal(h.frames.length, 1800);
+	assert.equal(h.frames.at(-1).timestamp, Math.round(1799 * 1_000_000 / 30));
+	recorder.abort();
+});

@@ -19,6 +19,7 @@
 		formatMbps,
 		type ExportFormatId
 	} from '#lib/export/formats';
+	import { takeSeconds } from '#lib/export/duration';
 	import { FrameRecorder } from '#lib/export/recorder';
 	import {
 		PALETTE_MODES,
@@ -70,7 +71,9 @@
 	// Delivery. `stage` means "fill the panel and do not record"; a format
 	// both frames the stage and becomes the export size.
 	let frame = $state<'stage' | ExportFormatId>('stage');
-	let exportSeconds = $state(0);
+	// Fixed 60s by default. "Track" deliberately uses the file's own length.
+	let exportSeconds = $state(60);
+	let customSeconds = $state(90);
 	let recording = $state(false);
 	let recordStarting = $state(false);
 	let recordFinalizing = $state(false);
@@ -97,15 +100,12 @@
 	let exportUrl = '';
 	let recordGeneration = 0;
 	let mounted = false;
+	let recordPlaybackAbort: AbortController | null = null;
 
 	let activeFormat = $derived(frame === 'stage' ? null : findFormat(frame));
 	let recordProgress = $derived(recordTotal > 0 ? Math.min(1, recordElapsed / recordTotal) : 0);
 	let deliverSeconds = $derived(
-		exportSeconds > 0
-			? exportSeconds
-			: !audioLive && audioLoaded && audioDuration > 0.25
-				? Math.min(audioDuration, 180)
-				: 12
+		takeSeconds(exportSeconds, customSeconds, audioDuration, audioLoaded && !audioLive)
 	);
 
 	function setLook(next: 'light' | 'dark') {
@@ -222,6 +222,14 @@
 			audioDuration = duration;
 		};
 		engine.onEnded = () => {
+			if (recording && !engine.isLive && recordElapsed < recordTotal - 0.4) {
+				engine.seek(0);
+				void engine.play().catch((error) => {
+					exportError = error instanceof Error ? error.message : 'Audio could not loop.';
+					void stopRecording(false);
+				});
+				return;
+			}
 			audioPlaying = false;
 			audioTime = audioDuration;
 		};
@@ -267,6 +275,7 @@
 		return () => {
 			mounted = false;
 			recordGeneration++;
+			recordPlaybackAbort?.abort();
 			instance.setFrameHook(null);
 			recorder?.abort();
 			recorder = null;
@@ -554,6 +563,9 @@
 			engine.pause();
 			engine.seek(0);
 			audioPlaying = false;
+			// Request audio activation before the first await loses the
+			// transient click gesture (important on autoplay-restricted hosts).
+			engine.activate();
 		}
 
 		// Let the new stage framing settle before the renderer is resized.
@@ -601,14 +613,27 @@
 		instance.reassemble();
 		if (engine && audioLoaded && !audioLive) {
 			engine.seek(0);
+			const controller = new AbortController();
+			recordPlaybackAbort = controller;
+			const playbackAborted = new Promise<never>((_, reject) => {
+				controller.signal.addEventListener(
+					'abort',
+					() => reject(new Error('Audio playback could not start. Try again after pressing Play.')),
+					{ once: true }
+				);
+			});
+			const timeout = window.setTimeout(() => controller.abort(), 5_000);
 			try {
-				await engine.play();
+				await Promise.race([engine.play(controller.signal), playbackAborted]);
 				audioPlaying = true;
 			} catch (error) {
 				audioPlaying = false;
 				exportError = error instanceof Error ? error.message : 'Audio playback could not start.';
 				await stopRecording(false);
 				return;
+			} finally {
+				window.clearTimeout(timeout);
+				if (recordPlaybackAbort === controller) recordPlaybackAbort = null;
 			}
 		}
 		if (!mounted || generation !== recordGeneration) return;
@@ -626,6 +651,8 @@
 	async function stopRecording(keep: boolean) {
 		if (recordFinalizing || (!recordStarting && !recording && !recorder)) return;
 		const generation = ++recordGeneration;
+		recordPlaybackAbort?.abort();
+		recordPlaybackAbort = null;
 		const format = activeFormat ?? EXPORT_FORMATS[0];
 		if (recordTimer) window.clearInterval(recordTimer);
 		recordTimer = 0;
@@ -805,8 +832,8 @@
 				<div class="panel-eyebrow"><span>( 01 — Instrument )</span><span>WebGL / 2D</span></div>
 				<h1 class="panel-title">An image,<br />in dust.</h1>
 				<p class="panel-lede">
-					A photograph is sampled into <strong>{fmtCount(params.particleCount)}</strong> points and held
-					in a slow field. Move the pointer to pull it apart; let go to bring it home.
+					The full photograph stays visible beneath <strong>{fmtCount(params.particleCount)}</strong>
+					points. Sound refracts the image; move the pointer to pull its grain apart.
 				</p>
 				<div class="panel-spec">
 					<span><b>{stats ? fmtCount(stats.count) : fmtCount(params.particleCount)}</b> points</span>
@@ -909,12 +936,60 @@
 					</div>
 				{:else}
 					<p class="empty-copy">
-						Drop a photograph into the stage. It is analysed once, then broken into fine points.
+						Drop a photograph into the stage. Its pixels stay whole while a second, fine-grained
+						particle field is sampled from it.
 					</p>
 				{/if}
 			</Section>
 
-			<Section title="Form" kicker="02" open={true}>
+			<Section title="Image / optics" kicker="02" open={true}>
+				<Toggle
+					label="Continuous image"
+					bind:checked={params.photo.enabled}
+					hint="The complete photograph sits beneath the particle field. Turn off for the original dot-only look."
+				/>
+				{#if params.photo.enabled}
+					<Slider
+						label="Particles"
+						bind:value={params.photo.particles}
+						min={0} max={1} step={0.01} format={fmt2}
+						hint="0 = photograph alone, 1 = dots alone. Default keeps every part of the source readable."
+					/>
+					<Slider
+						label="Break"
+						bind:value={params.photo.amount}
+						min={0} max={1} step={0.01} format={fmt2}
+						hint="Master optical destruction. At 0 the photograph is intact; at 1 the effects can tear it beyond recognition."
+					/>
+					<Slider
+						label="Refraction"
+						bind:value={params.photo.refraction}
+						min={0} max={1} step={0.01} format={fmt2}
+						hint="Liquid glass follows the actual image contours. Bass moves the lens."
+					/>
+					<Slider
+						label="Folds"
+						bind:value={params.photo.folds}
+						min={0} max={1} step={0.01} format={fmt2}
+						hint="The photograph bends into displaced strips; beats pull them sideways."
+					/>
+					<Slider
+						label="Blocks"
+						bind:value={params.photo.blocks}
+						min={0} max={1} step={0.01} format={fmt2}
+						hint="Stable fragments and pixelation; treble opens the gaps. At max the image can disintegrate."
+					/>
+					<Slider
+						label="Chromatic split"
+						bind:value={params.photo.chroma}
+						min={0} max={1} step={0.01} format={fmt2}
+						hint="RGB channels part along the contours, without removing the underlying pixels."
+					/>
+					<p class="grade-hint">All optics are audio-led. Without sound the complete source stays legible. Push Break and the effects to 1 with Motion at 1 for full deconstruction.</p>
+				{/if}
+			</Section>
+
+			<Section title="Form" kicker="03" open={true}>
 				<Toggle
 					label="Image surface"
 					bind:checked={params.form.enabled}
@@ -965,7 +1040,7 @@
 				{/if}
 			</Section>
 
-			<Section title="Audio" kicker="03" open={true}>
+			<Section title="Audio" kicker="04" open={true}>
 				<button class="upload" onclick={() => audioEl.click()} type="button">
 					<span>{audioLoaded ? 'Replace audio' : 'Choose audio'}</span>
 					<span class="upload-plus" aria-hidden="true">{audioLoaded ? '↺' : '+'}</span>
@@ -1104,12 +1179,12 @@
 				</div>
 			</Section>
 
-			<Section title="Export" kicker="04" open={true}>
+			<Section title="Export" kicker="05" open={true}>
 				<div class="block-label">
 					<span>Frame</span>
 					<span>{activeFormat ? activeFormat.note : 'as shown'}</span>
 				</div>
-				<div class="chips export-chips" role="group" aria-label="Frame and delivery size">
+				<div class="chips export-chips frame-chips" role="group" aria-label="Frame and delivery size">
 					<button
 						type="button"
 						class:active={frame === 'stage'}
@@ -1162,7 +1237,7 @@
 					>
 						Track
 					</button>
-					{#each [15, 30, 60] as seconds (seconds)}
+					{#each [30, 60, 120, 180] as seconds (seconds)}
 						<button
 							type="button"
 							class:active={exportSeconds === seconds}
@@ -1174,9 +1249,24 @@
 						</button>
 					{/each}
 				</div>
+				<div class="custom-take">
+					<label for="custom-take-seconds">Custom seconds (1–300)</label>
+					<input
+						id="custom-take-seconds"
+						type="number"
+						min="1"
+						max="300"
+						step="1"
+						bind:value={customSeconds}
+						disabled={exportBusy}
+						onfocus={() => (exportSeconds = -1)}
+						oninput={() => (exportSeconds = -1)}
+					/>
+				</div>
 				<p class="grade-hint">
-					Track records from the beginning, up to 180 s. Without a file, Track gives a 12 s take.
-					Live audio is included from the current moment.
+					Default 60 s. Track uses the file's duration (up to 300 s); without a file it means 60 s.
+					Short tracks loop to fill longer takes. Live audio starts from the current moment.
+					Long takes stay in browser memory until download; choose a shorter take if memory is limited.
 				</p>
 
 				<button
@@ -1237,7 +1327,7 @@
 				</p>
 			</Section>
 
-			<Section title="Presets" kicker="05" open={true}>
+			<Section title="Presets" kicker="06" open={true}>
 				<div class="presets">
 					{#each PRESETS as preset, index}
 						<button
@@ -1284,7 +1374,7 @@
 				<button class="ghost" type="button" onclick={randomize}>Randomize look</button>
 			</Section>
 
-			<Section title="Particles" kicker="06" open={true}>
+			<Section title="Particles" kicker="07" open={true}>
 				<Slider
 					label="Count"
 					bind:value={params.particleCount}
@@ -1313,7 +1403,7 @@
 				/>
 			</Section>
 
-			<Section title="Flow field" kicker="07" open={true}>
+			<Section title="Flow field" kicker="08" open={true}>
 				<Toggle label="Curl noise" bind:checked={params.curlEnabled} />
 				<Slider
 					label="Strength"
@@ -1341,7 +1431,7 @@
 				/>
 			</Section>
 
-			<Section title="Return" kicker="08">
+			<Section title="Return" kicker="09">
 				<Toggle label="Spring to origin" bind:checked={params.springEnabled} />
 				<Slider
 					label="Stiffness"
@@ -1369,7 +1459,7 @@
 				/>
 			</Section>
 
-			<Section title="Pointer" kicker="09">
+			<Section title="Pointer" kicker="10">
 				<Toggle label="Pointer force" bind:checked={params.pointerEnabled} />
 				<Slider
 					label="Attract / repel"
@@ -1398,7 +1488,7 @@
 				/>
 			</Section>
 
-			<Section title="Pulse" kicker="10">
+			<Section title="Pulse" kicker="11">
 				<Toggle label="Radial pulse" bind:checked={params.pulseEnabled} />
 				<Toggle
 					label="Auto pulse"
@@ -1423,7 +1513,7 @@
 				/>
 			</Section>
 
-			<Section title="Wave" kicker="11">
+			<Section title="Wave" kicker="12">
 				<Toggle label="Traveling ring" bind:checked={params.waveEnabled} />
 				<Slider
 					label="Strength"
@@ -1451,7 +1541,7 @@
 				/>
 			</Section>
 
-			<Section title="Fracture" kicker="12">
+			<Section title="Fracture" kicker="13">
 				<Toggle
 					label="Voronoi shards"
 					bind:checked={params.fractureEnabled}
@@ -1483,7 +1573,7 @@
 				/>
 			</Section>
 
-			<Section title="Depth" kicker="13">
+			<Section title="Depth" kicker="14">
 				<Toggle
 					label="Depth scatter"
 					bind:checked={params.depthEnabled}
@@ -1499,7 +1589,7 @@
 				/>
 			</Section>
 
-			<Section title="Modulation" kicker="14" open={false}>
+			<Section title="Modulation" kicker="15" open={false}>
 				<div class="lfo-head">
 					<span>4 routes · retrigger</span>
 					<button type="button" class="mini-button" onclick={triggerAllLfos}>Trigger all</button>
@@ -1616,7 +1706,7 @@
 			ondragleave={handleDragLeave}
 			ondrop={handleDrop}
 		>
-			<canvas bind:this={canvasEl} aria-label="GPU particle field"></canvas>
+			<canvas bind:this={canvasEl} aria-label="Audio-reactive photograph and particle field"></canvas>
 
 			<div class="ticks" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
 
@@ -2073,8 +2163,31 @@
 	}
 
 	.chips.export-chips {
-		grid-template-columns: repeat(4, minmax(0, 1fr));
+		grid-template-columns: repeat(5, minmax(0, 1fr));
 		margin-bottom: 8px;
+	}
+	.chips.frame-chips {
+		grid-template-columns: repeat(4, minmax(0, 1fr));
+	}
+	.custom-take {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 12px;
+		margin: 6px 0;
+		font-family: var(--mono);
+		font-size: 8px;
+		text-transform: uppercase;
+		color: var(--ink-soft);
+	}
+	.custom-take input {
+		width: 68px;
+		padding: 5px 7px;
+		border: 1px solid var(--line-strong);
+		border-radius: 0;
+		background: var(--paper);
+		color: var(--ink);
+		font: inherit;
 	}
 	.export-spec {
 		display: flex;

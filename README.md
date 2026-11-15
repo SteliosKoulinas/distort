@@ -2,7 +2,7 @@
 
 An image dissolves into 200,000 GPU particles and reassembles. Fine dots on black, slow incompressible drift, a loose spring home, and a two-stop colour grade that keeps portraits coherent on a dark stage.
 
-The WebGL foundation turns an image into a particle field. Audio from a file or live input opens its motion, and image-anchored **Form** controls bend, cut and lift the photograph. **Export** records the canvas and selected audio into a video framed for Reel, portrait Post or Square.
+The WebGL foundation turns an image into a particle field. A continuous, full-pixel photograph now sits below the dots, so the image is readable through its actual detail, not only its silhouette. Audio from a file or live input opens both image-space optical distortion and the particle motion. **Export** records the canvas and selected audio into a video framed for Reel, portrait Post or Square.
 
 ---
 
@@ -61,8 +61,9 @@ Requirements: a browser with WebGL2 and render-to-float support (`EXT_color_buff
 - Drop an audio file on the stage, or open **Audio** and click **Choose audio**. The image stays still until you press **Play**; then the spectrum opens the motion and the piece breathes with the track. The file is decoded locally and never uploaded.
 - Or point the field at anything already playing: **System audio** captures the machine's output (Spotify, a DAW, a video, another tab) and **Microphone** captures the room. A captured stream is analysed and muted, never replayed through the speakers.
 - Set **Motion** to decide how far the image opens while audio plays (0 keeps it near the source). **Spectrum** trims the spectral forces themselves.
+- **Image / optics** treats the full photograph as a texture: set **Particles** to 0 for image only, 1 for the old dot-only look. **Break** is the master optical strength. Refraction bends the pixels around source contours; Folds displaces image strips; Blocks fractures and pixelates regions; Chromatic split offsets the RGB channels. At default values the photograph remains recognizable; with Break, effects and Motion at 1 it can lose legibility completely. Silence leaves the photograph intact.
 - Open **Form** for Lens, Raster, Slices and Relief. Their offsets follow the source image and the same audio-led Motion envelope.
-- Choose **Export → Reel / Post / Square**, choose a take length, then **Record take**. Keep the tab visible. **Stop and keep** finishes early; a completed take downloads automatically and remains available through **Download**.
+- Choose **Export → Reel / Post / Square**, choose a take length, then **Record take**. The default is **60 seconds**, with 30/60/120/180-second presets and a custom 1–300-second field. **Track** means the audio file's duration, not an arbitrary fixed limit. A shorter audio file loops to fill a longer take. Keep the tab visible; **Stop and keep** finishes early. A completed take downloads automatically and remains available through **Download**.
 - Pick a preset: **Drift**, **Ash**, **Undertow**, **Shatter**, **Still**.
 - **Reassemble** (`R`) pulls the cloud home, then releases it.
 - **Pulse** (`Space`) fires a radial impulse. **Auto pulse** is a metronome for when no audio is playing; live bass onsets also feed the same `beat` envelope.
@@ -81,7 +82,13 @@ Measured on an Apple M2 (ANGLE/Metal, Chromium): **262,144 particles at 100 FPS*
 
 ---
 
-## Form — the image as a surface
+## Image / optics — continuous photograph
+
+The decoded ImageData is uploaded once as a full-colour GPU texture, with rows oriented to match the shader's UVs. A fitted image plane renders before the existing `THREE.Points` draw. It is deliberately independent of dot count, the simulation texture and the selected grade: even 1,000 particles do not reduce the photographic detail.
+
+The image shader performs inverse UV sampling from that texture. Its refraction follows baked luminance gradients with a smooth, low-frequency flow field; strips and fragments have stable source-space identities rather than changing cell memberships on each frame. Strong breakup creates black voids where pieces leave the image. A separate RGB offset grows near contours. **Break** and the global **Motion** slider multiply the audio loudness follower. Audio bands and beats accent the respective effects, while silence gives the unwarped source. Particle opacity is independently mixed with the continuous image. This is an additional rendering mechanism; the original dots, four LFOs, pointer/Pulse, presets and Form sliders remain available.
+
+## Form — dots as an image surface
 
 The source analysis is baked once into a small RGBA normal/relief map (512 px on the long edge). Its signed Sobel gradient follows the photograph's contours; luminance supplies depth and edge magnitude supplies local detail. Each point retains its source colour and source coordinates.
 
@@ -108,7 +115,7 @@ These are delivery presets, not promises about Instagram placement: Instagram ma
 
 If WebCodecs, AAC or audio-track processing is unavailable, the browser's `MediaRecorder` is used. Its actual codec/frame cadence depend on the browser. MP4 is preferred; WebM-only browsers clearly label the result, which needs conversion to H.264 MP4 before uploading to Instagram.
 
-**Audio and takes.** A file take restarts playback from zero. **Track** uses its duration up to **180 seconds**; without a file (or with live input), it records 12 seconds. The other lengths are 15, 30 and 60 seconds. File and live audio are tapped before the monitor mute gain, so recording a microphone/system input does not replay it through the speakers. Without an audio source, the export has no audio track. Each recorder owns cloned audio tracks so stopping one take leaves the analyser and the next take intact.
+**Audio and takes.** A file take restarts playback from zero. **Track** uses its duration up to **300 seconds**; without a file (or with live input), Track means 60 seconds. The default is **60 seconds**, not Track: the 30-second outcome previously arose when Track followed a 30-second audio file, or when 30 seconds was explicitly selected. Fixed lengths are 30, 60, 120 and 180 seconds, and Custom supports 1–300 seconds. If a file ends before the take ends, it loops to fill the selected duration. File and live audio are tapped before the monitor mute gain, so recording a microphone/system input does not replay it through the speakers. Without an audio source, the export has no audio track. Each recorder owns cloned audio tracks so stopping one take leaves the analyser and the next take intact.
 
 The tab must remain visible; hiding it interrupts the take instead of exporting a frozen visual. Encoding and finalisation happen locally, with the video held in memory until download. On slower hardware, lower the particle count.
 
@@ -161,12 +168,14 @@ src/
     gpu/shaders/simulation.ts   velocity/position/init GLSL + force modules
     gpu/shaders/noise.ts  3D simplex noise, hashes, divergence-free curl
     gpu/shaders/render.ts  point vertex/fragment shaders + palette grade
+    gpu/shaders/photo.ts   full-image refraction, folds, fragments, RGB split
     gpu/normals.ts         baked source gradient, luminance and edge texture
     gpu/view.ts            Three.js renderer, geometry, letterbox fit, DPR cap
     gpu/field.ts           loop, pointer, beat, audio, LFO runtime, stats
     audio/types.ts         AudioFrame { bass, mid, treble, amp, beat }
     audio/engine.ts        file element + live MediaStream → AnalyserNode, bands, onset beat
     export/formats.ts      Reel/Post/Square sizes, bitrates and size estimates
+    export/duration.ts     fixed/Track/custom take resolution (up to 300s)
     export/recorder.ts     WebCodecs H.264/AAC + MP4 muxer, MediaRecorder fallback
     ui/*.svelte            Section, Slider, Toggle, LfoScope, AudioScope
 ```
@@ -470,7 +479,7 @@ Presets reset the look but keep the user's **seed**, **particle count**, **palet
 
 **Phase 2 — live input.** Microphone and system-audio capture through the same analyser, analysed and muted. Still open: gain trim, per-band influence, a spectral-flux onset detector, and a small on-screen note about the browser's screen-sharing indicator. Streaming *services* cannot be tapped directly (DRM) — system capture is the route, and it already works.
 
-**Phase 3 — Form + video export.** Image-anchored Lens/Raster/Slices/Relief, delivery-framed previews, H.264/AAC MP4 recording and browser fallback. Further polish: URL-encoded presets and seeds, PNG still capture, keyboard-focusable canvas controls and reduced-motion behavior. Optional: image sequences or short video as the source.
+**Phase 3 — image optics + video export.** Continuous image-space distortion in addition to image-anchored dot Form; delivery-framed previews, 60-second default and up-to-300-second H.264/AAC MP4 recording, plus browser fallback. Further polish: URL-encoded presets and seeds, PNG still capture, keyboard-focusable canvas controls and reduced-motion behavior. Optional: image sequences or short video as the source.
 
 **Phase 4 — research, only if it earns its cost.** True Voronoi/SPH neighbors on the GPU, depth of field in the point shader, audio fingerprint-driven presets, or a compute-shader path via WebGPU with the WebGL2 renderer as fallback.
 
