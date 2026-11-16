@@ -2,7 +2,7 @@
 
 An image dissolves into 200,000 GPU particles and reassembles. Fine dots on black, slow incompressible drift, a loose spring home, and a two-stop colour grade that keeps portraits coherent on a dark stage.
 
-The WebGL foundation turns an image into a particle field. A continuous, full-pixel photograph now sits below the dots, so the image is readable through its actual detail, not only its silhouette. Audio from a file or live input opens both image-space optical distortion and the particle motion. **Export** records the canvas and selected audio into a video framed for Reel, portrait Post or Square.
+The WebGL foundation turns an image into a particle field. A continuous, full-pixel photograph now sits below the dots, so the image is readable through its actual detail, not only its silhouette. Audio from a file or live input opens both image-space optical distortion and the particle motion. **Export** records the canvas and selected audio into a video at any delivery size — Reel, Post, Square, Portrait, Wide, the current stage, or a custom width × height.
 
 ---
 
@@ -63,7 +63,7 @@ Requirements: a browser with WebGL2 and render-to-float support (`EXT_color_buff
 - Set **Motion** to decide how far the image opens while audio plays (0 keeps it near the source). **Spectrum** trims the spectral forces themselves.
 - **Image / optics** treats the full photograph as a texture: set **Particles** to 0 for image only, 1 for the old dot-only look. **Break** is the master optical strength. Refraction bends the pixels around source contours; Folds displaces image strips; Blocks fractures and pixelates regions; Chromatic split offsets the RGB channels. At default values the photograph remains recognizable; with Break, effects and Motion at 1 it can lose legibility completely. Silence leaves the photograph intact.
 - Open **Form** for Lens, Raster, Slices and Relief. Their offsets follow the source image and the same audio-led Motion envelope.
-- Choose **Export → Reel / Post / Square**, choose a take length, then **Record take**. The default is **60 seconds**, with 30/60/120/180-second presets and a custom 1–300-second field. **Track** means the audio file's duration, not an arbitrary fixed limit. A shorter audio file loops to fill a longer take. Keep the tab visible; **Stop and keep** finishes early. A completed take downloads automatically and remains available through **Download**.
+- Choose **Export → Stage / Reel / Post / Square / Portrait / Wide / Custom**, choose a take length, then **Record take**. Reel is the default. **Custom** takes any width × height; **Stage** records the current composition. The default take is **60 seconds**, with 30/60/120/180-second presets and a custom 1–300-second field. **Track** means the audio file's duration, not an arbitrary fixed limit. A shorter audio file loops to fill a longer take. Recording joins the audio where it is playing instead of restarting it. Keep the tab visible; **Stop and keep** finishes early. A completed take downloads automatically and remains available through **Download**.
 - Pick a preset: **Drift**, **Ash**, **Undertow**, **Shatter**, **Still**.
 - **Reassemble** (`R`) pulls the cloud home, then releases it.
 - **Pulse** (`Space`) fires a radial impulse. **Auto pulse** is a metronome for when no audio is playing; live bass onsets also feed the same `beat` envelope.
@@ -108,20 +108,26 @@ All four strengths share **Motion**. Silence retains only the small breathing fl
 | Reel | 1080 × 1920 | 9:16 | 17.4 Mbps |
 | Post | 1080 × 1350 | 4:5 | 12.2 Mbps |
 | Square | 1080 × 1080 | 1:1 | 9.8 Mbps |
+| Portrait | 1080 × 1440 | 3:4 | 13.1 Mbps |
+| Wide | 1920 × 1080 | 16:9 | 17.4 Mbps |
+| Stage | as framed | canvas aspect | derived |
+| Custom | W × H | W : H | derived |
+
+**Stage** records the composition currently on screen, scaled to 1080 px on its long edge. **Custom** accepts any width × height from **240 to 2160 px**, snapped to even numbers, with its own bitrate. Everything else is a fixed delivery preset.
 
 These are delivery presets, not promises about Instagram placement: Instagram may present uploaded videos as Reels. The full source image is fitted within the chosen frame, so a source with a different aspect has black margins. The selected frame previews at the actual delivery resolution; only the canvas is exported, without controls, HUD or tick marks.
 
-**Encoding.** WebCodecs targets H.264 High (Main/Baseline fallback), an explicit **30 fps** timeline, fast-start MP4 via `mp4-muxer`, and **AAC 192 kbps stereo** when audio is selected. Frames are captured immediately after the WebGL draw. Missed display frames hold the previous image rather than speeding up the video; sustained rendering/encoding stalls report an error. The bitrate is a quality target, not a fixed file-size guarantee.
+**Encoding.** WebCodecs targets H.264 High (Main/Baseline fallback), an explicit **30 fps** timeline, fast-start MP4 via `mp4-muxer`, and **AAC 192 kbps stereo** when audio is selected. The profile **level is derived from the frame size** (4.0 for 1080p30, 5.0 for 2160², 5.1 for 4K), so a large custom take is not rejected for asking for too low a level. Frames are captured immediately after the WebGL draw. Missed display frames hold the previous image rather than speeding up the video; sustained rendering/encoding stalls report an error. The bitrate is a quality target, not a fixed file-size guarantee.
 
 If WebCodecs, AAC or audio-track processing is unavailable, the browser's `MediaRecorder` is used. Its actual codec/frame cadence depend on the browser. MP4 is preferred; WebM-only browsers clearly label the result, which needs conversion to H.264 MP4 before uploading to Instagram.
 
-**Audio and takes.** A file take restarts playback from zero. **Track** uses its duration up to **300 seconds**; without a file (or with live input), Track means 60 seconds. The default is **60 seconds**, not Track: the 30-second outcome previously arose when Track followed a 30-second audio file, or when 30 seconds was explicitly selected. Fixed lengths are 30, 60, 120 and 180 seconds, and Custom supports 1–300 seconds. If a file ends before the take ends, it loops to fill the selected duration. File and live audio are tapped before the monitor mute gain, so recording a microphone/system input does not replay it through the speakers. Without an audio source, the export has no audio track. Each recorder owns cloned audio tracks so stopping one take leaves the analyser and the next take intact.
+**Audio and takes.** Recording **joins the track where it is playing**: pressing Record does not seek to zero, stop, or restart the audio, and the visual field is left undisturbed. If the track is paused, the take starts from that paused position. A track that was already running keeps running after the take ends. **Track** uses the file's duration up to **300 seconds**; without a file (or with live input), Track means 60 seconds. Fixed lengths are 30, 60, 120 and 180 seconds, and Custom supports 1–300 seconds. If a file ends before the take ends, it loops to fill the remaining time. File and live audio are tapped before the monitor mute gain, so recording a microphone/system input does not replay it through the speakers. Without an audio source, the export has no audio track. Each recorder owns cloned audio tracks so stopping one take leaves the analyser and the next take intact.
 
 The tab must remain visible; hiding it interrupts the take instead of exporting a frozen visual. Encoding and finalisation happen locally, with the video held in memory until download. On slower hardware, lower the particle count.
 
 **Instagram quality.** Instagram always re-encodes; no export setting can guarantee zero compression loss, especially for moving fine particles. Upload the exported file directly and enable **Upload at highest quality** in Instagram. Exact 1080-wide framing and generous source bitrates avoid an unnecessary resize or low-quality first encode. Approximate target sizes for 30 seconds including AAC are **66 MB / 46 MB / 37 MB**, respectively; actual sizes vary with the image and encoder.
 
-**Verification.** Local Chromium checks decoded Reel/Post/Square MP4s, confirmed 90 video samples for a 3-second take (30 fps), H.264 + audible stereo AAC, and `moov` before `mdat`. Silent recording and two consecutive MediaRecorder/audio takes also decoded successfully. `npm test` covers high-refresh-rate timing, held frames, asynchronous encoder errors and long stalls. Browser availability and performance still vary by platform.
+**Verification.** Local Chromium checks decoded MP4s at Reel, Post, Square and custom sizes, confirmed 90 video samples for a 3-second take (30 fps), H.264 + audible stereo AAC, and `moov` before `mdat`. A 12-second track whose first 2.5 seconds are silent was recorded from 4 s in; the exported file carried the tone from its first sample, which proves Record no longer restarts the audio. `npm test` covers high-refresh-rate timing, held frames, asynchronous encoder errors, long stalls, take durations, even/custom frame sizing, H.264 level selection and image-optics modulation. Browser availability and performance still vary by platform.
 
 ---
 
@@ -175,7 +181,7 @@ src/
     gpu/field.ts           loop, pointer, beat, audio, LFO runtime, stats
     audio/types.ts         AudioFrame { bass, mid, treble, amp, beat }
     audio/engine.ts        file element + live MediaStream → AnalyserNode, bands, onset beat
-    export/formats.ts      Reel/Post/Square sizes, bitrates and size estimates
+    export/formats.ts      delivery presets, Custom/Stage sizes, bitrates and estimates
     export/duration.ts     fixed/Track/custom take resolution (up to 300s)
     export/recorder.ts     WebCodecs H.264/AAC + MP4 muxer, MediaRecorder fallback
     ui/*.svelte            Section, Slider, Toggle, LfoScope, AudioScope

@@ -103,3 +103,24 @@ test('a 60-second take is not capped at 30 seconds', async (t) => {
 	assert.equal(h.frames.at(-1).timestamp, Math.round(1799 * 1_000_000 / 30));
 	recorder.abort();
 });
+
+test('the H.264 level follows the frame size instead of always asking for 4.2', async () => {
+	const { h264Codecs, h264LevelHex } = await import('../src/lib/export/recorder.ts');
+	assert.equal(h264LevelHex(1080, 1920, 30), '28');
+	assert.equal(h264LevelHex(1080, 1350, 30), '28');
+	assert.equal(h264LevelHex(2160, 2160, 30), '32');
+	assert.equal(h264LevelHex(3840, 2160, 30), '33');
+	assert.equal(h264LevelHex(7680, 4320, 30), '3C');
+	assert.equal(h264LevelHex(20_000, 20_000, 30), null);
+	assert.equal(h264Codecs(1080, 1920, 30)[0], 'avc1.640028');
+	assert.equal(h264Codecs(2160, 2160, 30)[0], 'avc1.640032');
+	assert.deepEqual(h264Codecs(20_000, 20_000, 30), []);
+});
+
+test('odd delivery sizes fall back instead of configuring an illegal encoder', async (t) => {
+	const h = harness(t);
+	await assert.rejects(
+		FrameRecorder.create({ ...h.options, width: 1079, height: 1921 }),
+		/cannot record video|failed/i
+	);
+});

@@ -75,6 +75,55 @@ const AUDIO_CHANNELS = 2;
  * WebCodecs
  * ------------------------------------------------------------------ */
 
+interface H264Level {
+	/** level_idc, as the two hex digits in the codec string. */
+	hex: string;
+	/** Max frame size in 16 × 16 macroblocks. */
+	maxFs: number;
+	/** Max macroblocks per second. */
+	maxMbps: number;
+}
+
+/** H.264 Annex A limits, from 3.1 to 6.2. */
+const LEVELS: H264Level[] = [
+	{ hex: '1F', maxFs: 3_600, maxMbps: 108_000 },
+	{ hex: '28', maxFs: 8_192, maxMbps: 245_760 },
+	{ hex: '29', maxFs: 8_192, maxMbps: 245_760 },
+	{ hex: '2A', maxFs: 8_704, maxMbps: 522_240 },
+	{ hex: '32', maxFs: 22_080, maxMbps: 589_824 },
+	{ hex: '33', maxFs: 36_864, maxMbps: 983_040 },
+	{ hex: '34', maxFs: 36_864, maxMbps: 2_073_600 },
+	{ hex: '3C', maxFs: 139_264, maxMbps: 4_177_920 },
+	{ hex: '3D', maxFs: 139_264, maxMbps: 8_355_840 },
+	{ hex: '3E', maxFs: 139_264, maxMbps: 16_711_680 }
+];
+
+/** Smallest H.264 level that can carry this frame size and rate, or null. */
+export function h264LevelHex(width: number, height: number, fps: number): string | null {
+	if (width <= 0 || height <= 0 || fps <= 0) return null;
+	const mbs = Math.ceil(width / 16) * Math.ceil(height / 16);
+	const mbps = mbs * fps;
+	return LEVELS.find((level) => mbs <= level.maxFs && mbps <= level.maxMbps)?.hex ?? null;
+}
+
+/**
+ * Codec strings to probe, highest quality first. The level follows the frame
+ * size, so a 4K custom take no longer asks for level 4.2 and gets rejected.
+ * Levels above the required one are included because some encoders advertise
+ * only their maximum.
+ */
+export function h264Codecs(width: number, height: number, fps: number): string[] {
+	const hex = h264LevelHex(width, height, fps);
+	if (!hex) return [];
+	const start = LEVELS.findIndex((level) => level.hex === hex);
+	const codes: string[] = [];
+	for (let i = start; i < Math.min(LEVELS.length, start + 3); i++) {
+		const level = LEVELS[i].hex;
+		codes.push(`avc1.6400${level}`, `avc1.4D00${level}`, `avc1.42E0${level}`);
+	}
+	return codes;
+}
+
 async function pickVideoConfig(
 	width: number,
 	height: number,
@@ -82,24 +131,27 @@ async function pickVideoConfig(
 	bitrate: number
 ): Promise<VideoEncoderConfig | null> {
 	if (typeof VideoEncoder !== 'function') return null;
+	// 4:2:0 chroma is sampled in pairs; odd delivery sizes are not legal.
+	if (width % 2 !== 0 || height % 2 !== 0) return null;
 
-	// `avc1.64002A` is H.264 High, level 4.2: 1080 × 1920 at 30 fps and up to
-	// 50 Mbps sits comfortably inside it. The lower rungs are only there for
-	// machines whose encoder refuses High.
-	const bases: Omit<VideoEncoderConfig, 'width' | 'height' | 'bitrate' | 'framerate'>[] = [
-		{ codec: 'avc1.64002A', avc: { format: 'avc' }, latencyMode: 'quality' },
-		{ codec: 'avc1.64002A', avc: { format: 'avc' } },
-		{ codec: 'avc1.4D002A', avc: { format: 'avc' } },
-		{ codec: 'avc1.42E02A', avc: { format: 'avc' } }
-	];
-
-	for (const base of bases) {
-		const config: VideoEncoderConfig = { ...base, width, height, bitrate, framerate: fps };
-		try {
-			const support = await VideoEncoder.isConfigSupported(config);
-			if (support.supported) return config;
-		} catch {
-			/* try the next rung */
+	const codes = h264Codecs(width, height, fps);
+	for (const quality of [true, false]) {
+		for (const codec of codes) {
+			const config: VideoEncoderConfig = {
+				codec,
+				avc: { format: 'avc' },
+				width,
+				height,
+				bitrate,
+				framerate: fps,
+				...(quality ? { latencyMode: 'quality' as const } : {})
+			};
+			try {
+				const support = await VideoEncoder.isConfigSupported(config);
+				if (support.supported) return config;
+			} catch {
+				/* try the next rung */
+			}
 		}
 	}
 	return null;

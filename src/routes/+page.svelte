@@ -13,11 +13,17 @@
 	} from '#lib/core/params';
 	import {
 		EXPORT_FORMATS,
+		customFormat,
 		estimateBytes,
 		findFormat,
 		formatBytes,
 		formatMbps,
-		type ExportFormatId
+		MAX_EXPORT_EDGE,
+		MIN_EXPORT_EDGE,
+		normalizeEdge,
+		stageFormat,
+		type ExportFormat,
+		type FrameChoice
 	} from '#lib/export/formats';
 	import { takeSeconds } from '#lib/export/duration';
 	import { FrameRecorder } from '#lib/export/recorder';
@@ -68,9 +74,11 @@
 	let audioLive = $state(false);
 	let audioLiveName = $state('');
 
-	// Delivery. `stage` means "fill the panel and do not record"; a format
-	// both frames the stage and becomes the export size.
-	let frame = $state<'stage' | ExportFormatId>('stage');
+	// Delivery. `stage` follows the panel's own aspect; every other choice
+	// frames the stage and becomes the export size.
+	let frame = $state<FrameChoice>('reel');
+	let customWidth = $state(1080);
+	let customHeight = $state(1440);
 	// Fixed 60s by default. "Track" deliberately uses the file's own length.
 	let exportSeconds = $state(60);
 	let customSeconds = $state(90);
@@ -101,8 +109,17 @@
 	let recordGeneration = 0;
 	let mounted = false;
 	let recordPlaybackAbort: AbortController | null = null;
+	/** True when the track was already playing before the take began. */
+	let recordKeepsAudio = false;
+	let recordFormat: ExportFormat | null = null;
 
-	let activeFormat = $derived(frame === 'stage' ? null : findFormat(frame));
+	let activeFormat = $derived<ExportFormat | null>(
+		frame === 'stage'
+			? null
+			: frame === 'custom'
+				? customFormat(customWidth, customHeight)
+				: findFormat(frame)
+	);
 	let recordProgress = $derived(recordTotal > 0 ? Math.min(1, recordElapsed / recordTotal) : 0);
 	let deliverSeconds = $derived(
 		takeSeconds(exportSeconds, customSeconds, audioDuration, audioLoaded && !audioLive)
@@ -519,7 +536,7 @@
 		field.resample();
 	}
 
-	function chooseFrame(next: 'stage' | ExportFormatId) {
+	function chooseFrame(next: FrameChoice) {
 		if (exportBusy) return;
 		frame = next;
 	}
@@ -547,22 +564,24 @@
 			return;
 		}
 
-		const format = activeFormat ?? EXPORT_FORMATS[0];
-		if (frame === 'stage') frame = format.id;
+		const format =
+			activeFormat ?? stageFormat(canvasEl.clientWidth, canvasEl.clientHeight);
 
 		const engine = audioEngine;
+		// Join the take where the sound already is instead of restarting it.
+		const audioWasPlaying = !!engine && !engine.isLive && engine.isPlaying;
 		const seconds = deliverSeconds;
 		const generation = ++recordGeneration;
 
 		releaseExport();
 		recordStarting = true;
+		recordKeepsAudio = audioWasPlaying;
+		recordFormat = format;
 		recordElapsed = 0;
 		recordTotal = seconds;
 		recordDetail = '';
 		if (engine && !engine.isLive) {
-			engine.pause();
-			engine.seek(0);
-			audioPlaying = false;
+			audioPlaying = audioWasPlaying;
 			// Request audio activation before the first await loses the
 			// transient click gesture (important on autoplay-restricted hosts).
 			engine.activate();
@@ -609,10 +628,10 @@
 			}
 		});
 
-		// Start from the image, not mid-drift, and let the sound open it.
-		instance.reassemble();
+		// A silent field is reset to the image and opened by the sound. A track
+		// that is already running keeps its motion: the take joins mid-flight.
+		if (!audioWasPlaying) instance.reassemble();
 		if (engine && audioLoaded && !audioLive) {
-			engine.seek(0);
 			const controller = new AbortController();
 			recordPlaybackAbort = controller;
 			const playbackAborted = new Promise<never>((_, reject) => {
@@ -653,7 +672,7 @@
 		const generation = ++recordGeneration;
 		recordPlaybackAbort?.abort();
 		recordPlaybackAbort = null;
-		const format = activeFormat ?? EXPORT_FORMATS[0];
+		const format = recordFormat ?? activeFormat ?? EXPORT_FORMATS[0];
 		if (recordTimer) window.clearInterval(recordTimer);
 		recordTimer = 0;
 
@@ -663,9 +682,17 @@
 		recording = false;
 		recordStarting = false;
 		if (!audioEngine?.isLive) {
-			audioPlaying = false;
-			audioEngine?.pause();
+			// Only stop the transport if the take started it. Recording a
+			// performance should not eject the performer.
+			if (recordKeepsAudio && audioEngine) {
+				audioPlaying = true;
+			} else {
+				audioPlaying = false;
+				audioEngine?.pause();
+			}
+			recordKeepsAudio = false;
 		}
+		recordFormat = null;
 		if (!active) return;
 		if (!keep) {
 			active.abort();
@@ -1205,7 +1232,49 @@
 							{option.label}
 						</button>
 					{/each}
+					<button
+						type="button"
+						class:active={frame === 'custom'}
+						aria-pressed={frame === 'custom'}
+						disabled={exportBusy}
+						onclick={() => chooseFrame('custom')}
+					>
+						Custom
+					</button>
 				</div>
+
+				{#if frame === 'custom'}
+					<div class="custom-size">
+						<label for="custom-export-width">Width</label>
+						<input
+							id="custom-export-width"
+							type="number"
+							min={MIN_EXPORT_EDGE}
+							max={MAX_EXPORT_EDGE}
+							step="2"
+							bind:value={customWidth}
+							onchange={() => (customWidth = normalizeEdge(customWidth))}
+							disabled={exportBusy}
+						/>
+						<span aria-hidden="true">×</span>
+						<label for="custom-export-height">Height</label>
+						<input
+							id="custom-export-height"
+							type="number"
+							min={MIN_EXPORT_EDGE}
+							max={MAX_EXPORT_EDGE}
+							step="2"
+							bind:value={customHeight}
+							onchange={() => (customHeight = normalizeEdge(customHeight))}
+							disabled={exportBusy}
+						/>
+					</div>
+					<p class="grade-hint">
+						Any width × height from {MIN_EXPORT_EDGE} to {MAX_EXPORT_EDGE} px, snapped to even
+						numbers. The H.264 level follows the frame size. Instagram downscales anything above
+						1080 px.
+					</p>
+				{/if}
 
 				{#if activeFormat}
 					<div class="export-spec">
@@ -1221,8 +1290,10 @@
 					</p>
 				{:else}
 					<p class="grade-hint">
-						Pick <b>Reel</b> for 9:16 or <b>Post</b> for 4:5. The stage reframes to that aspect, so the
-						preview and the file are the same composition.
+						<b>Stage</b> records the current composition at 1080 px on its long edge. Pick
+						<b>Reel</b> for 9:16, <b>Post</b> for 4:5, or <b>Custom</b> for any width × height. The
+						stage reframes to the chosen aspect, so the preview and the file are the same
+						composition.
 					</p>
 				{/if}
 
@@ -1265,8 +1336,9 @@
 				</div>
 				<p class="grade-hint">
 					Default 60 s. Track uses the file's duration (up to 300 s); without a file it means 60 s.
-					Short tracks loop to fill longer takes. Live audio starts from the current moment.
-					Long takes stay in browser memory until download; choose a shorter take if memory is limited.
+					Short tracks loop to fill longer takes. Recording joins the audio where it is playing, so
+					pressing Record never restarts the track. Long takes stay in browser memory until download;
+					choose a shorter take if memory is limited.
 				</p>
 
 				<button
@@ -2177,6 +2249,26 @@
 	}
 	.chips.frame-chips {
 		grid-template-columns: repeat(4, minmax(0, 1fr));
+	}
+	.custom-size {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		margin: 7px 0;
+		font-family: var(--mono);
+		font-size: 8px;
+		text-transform: uppercase;
+		color: var(--ink-soft);
+	}
+	.custom-size input {
+		flex: 1 1 auto;
+		min-width: 0;
+		padding: 5px 7px;
+		border: 1px solid var(--line-strong);
+		border-radius: 0;
+		background: var(--paper);
+		color: var(--ink);
+		font: inherit;
 	}
 	.custom-take {
 		display: flex;
