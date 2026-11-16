@@ -18,7 +18,13 @@ export type LfoTarget =
 	| 'fracture'
 	| 'depth'
 	| 'size'
-	| 'opacity';
+	| 'opacity'
+	| 'photoParticles'
+	| 'photoBreak'
+	| 'photoRefraction'
+	| 'photoFolds'
+	| 'photoBlocks'
+	| 'photoChroma';
 
 export type LfoShape = 'sine' | 'triangle' | 'ramp' | 'random';
 
@@ -36,7 +42,13 @@ export function neutralModulation(): Modulation {
 		fracture: 1,
 		depth: 1,
 		size: 1,
-		opacity: 1
+		opacity: 1,
+		photoParticles: 1,
+		photoBreak: 1,
+		photoRefraction: 1,
+		photoFolds: 1,
+		photoBlocks: 1,
+		photoChroma: 1
 	};
 }
 
@@ -55,6 +67,48 @@ export interface PaletteSettings {
 	/** How far to move from the source colours toward the grade, 0..1. */
 	amount: number;
 	/** Saturation of the graded colour, 0..1. */
+	chroma: number;
+}
+
+/**
+ * How the photograph is treated as a surface.
+ *
+ * These are not forces: the dots stay in their own part of the picture. Each
+ * one bends, cuts or lifts the image in its own coordinates, which is what
+ * keeps a face readable while it moves. All four are gated by the same Motion
+ * envelope as the physics, and each answers a different band:
+ *
+ *   lens   ← bass      contours slide along their own gradient
+ *   raster ← treble    the image splits into its own cells
+ *   slice  ← beat      horizontal bands lift sideways
+ *   relief ← amp       bright structure rises toward the viewer
+ */
+export interface FormSettings {
+	enabled: boolean;
+	/** 0..1. Refraction along the luminance gradient. */
+	lens: number;
+	/** 0..1. Cell deconstruction, anchored to source coordinates. */
+	raster: number;
+	/** 0..1. Horizontal band displacement. */
+	slice: number;
+	/** 0..1. Depth lift from luminance. */
+	relief: number;
+}
+
+/** Continuous photograph underneath the particles; no dot reconstruction needed. */
+export interface PhotoSettings {
+	enabled: boolean;
+	/** 0 = photograph alone, 1 = original particle-only rendering. */
+	particles: number;
+	/** Master optical destruction, 0..1. At 1 the effects can erase legibility. */
+	amount: number;
+	/** Contour-following refraction / fluid glass. */
+	refraction: number;
+	/** Displaced horizontal strips. */
+	folds: number;
+	/** Image block breakup and pixelation. */
+	blocks: number;
+	/** RGB channel separation. */
 	chroma: number;
 }
 
@@ -115,6 +169,12 @@ export interface SimParams {
 
 	/** Two-stop per-particle grade. Does not require a resample. */
 	palette: PaletteSettings;
+
+	/** Image-anchored optics. Does not require a resample. */
+	form: FormSettings;
+
+	/** Full-resolution image-space treatment, rendered before the point field. */
+	photo: PhotoSettings;
 
 	/** Four user LFOs. Phases live in ParticleField, not in this snapshot. */
 	lfos: LfoSettings[];
@@ -181,6 +241,23 @@ const drift: SimParams = {
 		chroma: 0.86
 	},
 
+	form: {
+		enabled: true,
+		lens: 0.55,
+		raster: 0.16,
+		slice: 0.1,
+		relief: 0.4
+	},
+	photo: {
+		enabled: true,
+		particles: 0.12,
+		amount: 0.32,
+		refraction: 0.65,
+		folds: 0.4,
+		blocks: 0.28,
+		chroma: 0.3
+	},
+
 	lfos: [
 		{ enabled: true, target: 'curl', shape: 'sine', rate: 0.07, depth: 0.35 },
 		{ enabled: true, target: 'depth', shape: 'triangle', rate: 0.11, depth: 0.45 },
@@ -205,6 +282,8 @@ export function createDefaultParams(): SimParams {
 	return {
 		...drift,
 		palette: { ...drift.palette },
+		form: { ...drift.form },
+		photo: { ...drift.photo },
 		lfos: drift.lfos.map((lfo) => ({ ...lfo })),
 		audio: { ...drift.audio }
 	};
@@ -232,7 +311,8 @@ export const PRESETS: Preset[] = [
 			pointerStrength: 1.4,
 			pulseStrength: 2.2,
 			depthStrength: 0.35,
-			edgeBoost: 1.4
+			edgeBoost: 1.4,
+			form: { enabled: true, lens: 1, raster: 0.1, slice: 0.05, relief: 0.3 }
 		}
 	},
 	{
@@ -256,7 +336,8 @@ export const PRESETS: Preset[] = [
 			waveFrequency: 6,
 			waveSpeed: 2.0,
 			depthStrength: 0.4,
-			edgeBoost: 1.25
+			edgeBoost: 1.25,
+			form: { enabled: true, lens: 0.5, raster: 0.22, slice: 0.14, relief: 0.5 }
 		}
 	},
 	{
@@ -276,7 +357,8 @@ export const PRESETS: Preset[] = [
 			fractureScale: 9,
 			fractureSpread: 0.35,
 			depthStrength: 0.3,
-			edgeBoost: 1.5
+			edgeBoost: 1.5,
+			form: { enabled: true, lens: 0.25, raster: 0.72, slice: 0.5, relief: 0.28 }
 		}
 	},
 	{
@@ -292,7 +374,8 @@ export const PRESETS: Preset[] = [
 			pointerStrength: 0.9,
 			pulseStrength: 1.6,
 			depthEnabled: false,
-			edgeBoost: 1.15
+			edgeBoost: 1.15,
+			form: { enabled: true, lens: 0.3, raster: 0, slice: 0, relief: 0.22 }
 		}
 	}
 ];
@@ -310,6 +393,8 @@ export function applyPreset(base: SimParams, preset: Preset): SimParams {
 		seed: base.seed,
 		particleCount: base.particleCount,
 		palette: { ...base.palette },
+		form: { ...(preset.params.form ?? defaults.form) },
+		photo: { ...base.photo },
 		lfos: base.lfos.map((lfo) => ({ ...lfo })),
 		audio: { ...base.audio }
 	};
@@ -347,6 +432,14 @@ export function randomizeLook(base: SimParams, rand: () => number): SimParams {
 			amount: between(0.7, 1),
 			chroma: between(0.62, 1)
 		},
+		form: {
+			enabled: true,
+			lens: between(0.25, 1),
+			raster: rand() > 0.5 ? between(0.05, 0.6) : 0,
+			slice: rand() > 0.6 ? between(0.05, 0.45) : 0,
+			relief: between(0.15, 0.65)
+		},
+		photo: { ...base.photo },
 		edgeBoost: between(0.8, 2.4)
 	};
 }

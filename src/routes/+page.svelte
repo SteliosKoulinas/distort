@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
 	import { ParticleField, type FieldStats } from '#lib/gpu/field';
 	import { decodeImageFile } from '#lib/image/decode';
 	import { analyzeImage, type ImageAnalysis } from '#lib/image/analyze';
@@ -11,6 +11,22 @@
 		type PresetId,
 		type SimParams
 	} from '#lib/core/params';
+	import {
+		EXPORT_FORMATS,
+		customFormat,
+		estimateBytes,
+		findFormat,
+		formatBytes,
+		formatMbps,
+		MAX_EXPORT_EDGE,
+		MIN_EXPORT_EDGE,
+		normalizeEdge,
+		stageFormat,
+		type ExportFormat,
+		type FrameChoice
+	} from '#lib/export/formats';
+	import { takeSeconds } from '#lib/export/duration';
+	import { FrameRecorder } from '#lib/export/recorder';
 	import {
 		PALETTE_MODES,
 		paletteCss,
@@ -55,6 +71,59 @@
 	let audioLoaded = $state(false);
 	let audioLoading = $state(false);
 	let audioPlaying = $state(false);
+	let audioLive = $state(false);
+	let audioLiveName = $state('');
+
+	// Delivery. `stage` follows the panel's own aspect; every other choice
+	// frames the stage and becomes the export size.
+	let frame = $state<FrameChoice>('reel');
+	let customWidth = $state(1080);
+	let customHeight = $state(1440);
+	// Fixed 60s by default. "Track" deliberately uses the file's own length.
+	let exportSeconds = $state(60);
+	let customSeconds = $state(90);
+	let recording = $state(false);
+	let recordStarting = $state(false);
+	let recordFinalizing = $state(false);
+	let exportBusy = $derived(recording || recordStarting || recordFinalizing);
+	let recordElapsed = $state(0);
+	let recordTotal = $state(0);
+	let recordDetail = $state('');
+	let exportError = $state('');
+	let exportResult = $state<{
+		url: string;
+		name: string;
+		size: number;
+		width: number;
+		height: number;
+		duration: number;
+		encoder: string;
+		detail: string;
+		hasAudio: boolean;
+	} | null>(null);
+
+	let recorder: FrameRecorder | null = null;
+	let recordTimer = 0;
+	let recordStart = 0;
+	let exportUrl = '';
+	let recordGeneration = 0;
+	let mounted = false;
+	let recordPlaybackAbort: AbortController | null = null;
+	/** True when the track was already playing before the take began. */
+	let recordKeepsAudio = false;
+	let recordFormat: ExportFormat | null = null;
+
+	let activeFormat = $derived<ExportFormat | null>(
+		frame === 'stage'
+			? null
+			: frame === 'custom'
+				? customFormat(customWidth, customHeight)
+				: findFormat(frame)
+	);
+	let recordProgress = $derived(recordTotal > 0 ? Math.min(1, recordElapsed / recordTotal) : 0);
+	let deliverSeconds = $derived(
+		takeSeconds(exportSeconds, customSeconds, audioDuration, audioLoaded && !audioLive)
+	);
 
 	function setLook(next: 'light' | 'dark') {
 		look = next;
@@ -122,6 +191,7 @@
 	);
 
 	onMount(() => {
+		mounted = true;
 		look = document.documentElement.dataset.look === 'dark' ? 'dark' : 'light';
 		document
 			.querySelector('meta[name="theme-color"]')
@@ -148,6 +218,7 @@
 				},
 				onError: (message) => {
 					errorMessage = message;
+					if (recorder) void stopRecording(false);
 				}
 			});
 		} catch (error) {
@@ -168,8 +239,20 @@
 			audioDuration = duration;
 		};
 		engine.onEnded = () => {
+			if (recording && !engine.isLive && recordElapsed < recordTotal - 0.4) {
+				engine.seek(0);
+				void engine.play().catch((error) => {
+					exportError = error instanceof Error ? error.message : 'Audio could not loop.';
+					void stopRecording(false);
+				});
+				return;
+			}
 			audioPlaying = false;
 			audioTime = audioDuration;
+		};
+		engine.onStreamEnded = () => {
+			audioLive = false;
+			audioLiveName = '';
 		};
 		audioEngine = engine;
 		audioSource.engine = engine;
@@ -197,11 +280,26 @@
 		};
 
 		window.addEventListener('keydown', onKeyDown);
+		const onVisibilityChange = () => {
+			if (document.hidden && (recording || recordStarting)) {
+				exportError = 'Recording interrupted: keep this tab visible during a take.';
+				void stopRecording(false);
+			}
+		};
+		document.addEventListener('visibilitychange', onVisibilityChange);
 
 		// Browser-only cleanup, returned from onMount. No onDestroy.
 		return () => {
+			mounted = false;
+			recordGeneration++;
+			recordPlaybackAbort?.abort();
+			instance.setFrameHook(null);
+			recorder?.abort();
+			recorder = null;
 			window.clearInterval(clockTimer);
+			window.clearInterval(recordTimer);
 			window.removeEventListener('keydown', onKeyDown);
+			document.removeEventListener('visibilitychange', onVisibilityChange);
 			scopeSource.field = null;
 			audioSource.engine = null;
 			audioEngine?.dispose();
@@ -209,7 +307,15 @@
 			instance.dispose();
 			field = null;
 			if (thumbUrl) URL.revokeObjectURL(thumbUrl);
+			if (exportUrl) URL.revokeObjectURL(exportUrl);
 		};
+	});
+
+	// Delivery preview uses the same framebuffer as recording, including grain.
+	$effect(() => {
+		const format = activeFormat;
+		if (format) field?.setExportSize(format.width, format.height);
+		else field?.clearExportSize();
 	});
 
 	// The UI writes a plain snapshot on a control change. The animation loop
@@ -238,6 +344,7 @@
 	});
 
 	async function loadFile(file: File) {
+		if (exportBusy) return;
 		errorMessage = '';
 
 		if (!file.type.startsWith('image/')) {
@@ -281,6 +388,7 @@
 	}
 
 	async function loadAudioFile(file: File) {
+		if (exportBusy) return;
 		errorMessage = '';
 
 		if (!isAudioFile(file)) {
@@ -293,6 +401,7 @@
 			return;
 		}
 
+		stopLive();
 		audioLoading = true;
 		try {
 			const track = await engine.load(file);
@@ -321,8 +430,9 @@
 	}
 
 	async function toggleAudio() {
+		if (exportBusy) return;
 		const engine = audioEngine;
-		if (!engine || !audioLoaded || audioLoading) return;
+		if (!engine || !audioLoaded || audioLoading || audioLive) return;
 
 		errorMessage = '';
 		if (engine.isPlaying) {
@@ -342,6 +452,7 @@
 	}
 
 	function seekAudio(event: Event) {
+		if (exportBusy) return;
 		const input = event.currentTarget as HTMLInputElement;
 		const next = Number(input.value);
 		if (!Number.isFinite(next)) return;
@@ -349,10 +460,279 @@
 		audioTime = next;
 	}
 
+	/**
+	 * Analyse whatever the machine is playing — Spotify, a DAW, a browser tab.
+	 * The captured audio is never replayed; it only feeds the spectrum.
+	 */
+	async function startSystemAudio() {
+		if (exportBusy) return;
+		errorMessage = '';
+		const engine = audioEngine;
+		if (!engine) return;
+
+		const media = navigator.mediaDevices as MediaDevices | undefined;
+		if (!media?.getDisplayMedia) {
+			errorMessage = 'This browser cannot capture system audio. Try Chrome on desktop.';
+			return;
+		}
+
+		try {
+			// A video track is usually required to obtain an audio track from a
+			// display capture; it is ignored here.
+			const stream = await media.getDisplayMedia({ video: true, audio: true });
+			if (stream.getAudioTracks().length === 0) {
+				for (const track of stream.getTracks()) track.stop();
+				errorMessage =
+					'No audio was shared. Pick a screen or window and tick “Share system audio”.';
+				return;
+			}
+			engine.attachStream(stream, 'System audio');
+			audioLive = true;
+			audioLiveName = 'System audio';
+			audioPlaying = false;
+		} catch {
+			// The user cancelled the picker, or the browser denied capture.
+		}
+	}
+
+	async function startMicrophone() {
+		if (exportBusy) return;
+		errorMessage = '';
+		const engine = audioEngine;
+		if (!engine) return;
+
+		const media = navigator.mediaDevices as MediaDevices | undefined;
+		if (!media?.getUserMedia) {
+			errorMessage = 'This browser cannot reach a microphone.';
+			return;
+		}
+
+		try {
+			const stream = await media.getUserMedia({ audio: true });
+			engine.attachStream(stream, 'Microphone');
+			audioLive = true;
+			audioLiveName = 'Microphone';
+			audioPlaying = false;
+		} catch {
+			errorMessage = 'Microphone access was blocked.';
+		}
+	}
+
+	function stopLive() {
+		if (exportBusy) return;
+		if (!audioLive && !audioEngine?.isLive) {
+			audioLive = false;
+			return;
+		}
+		audioEngine?.detachStream();
+		audioLive = false;
+		audioLiveName = '';
+		audioPlaying = false;
+	}
+
 	function resampleNow() {
 		if (!field) return;
 		field.setParams($state.snapshot(params));
 		field.resample();
+	}
+
+	function chooseFrame(next: FrameChoice) {
+		if (exportBusy) return;
+		frame = next;
+	}
+
+	function releaseExport() {
+		if (exportUrl) URL.revokeObjectURL(exportUrl);
+		exportUrl = '';
+		exportResult = null;
+	}
+
+	/**
+	 * Record the canvas at delivery resolution.
+	 *
+	 * The stage is framed to the target aspect first, then the renderer is
+	 * asked for the exact delivery size, so what is recorded is the same
+	 * composition that was on screen — at 1080 px wide. Audio starts from the
+	 * top of the take, because the piece is built around the sound opening it.
+	 */
+	async function startRecording() {
+		if (exportBusy || loading || audioLoading) return;
+		exportError = '';
+		const instance = field;
+		if (!instance || !analysis) {
+			exportError = 'Load an image before recording.';
+			return;
+		}
+
+		const format =
+			activeFormat ?? stageFormat(canvasEl.clientWidth, canvasEl.clientHeight);
+
+		const engine = audioEngine;
+		// Join the take where the sound already is instead of restarting it.
+		const audioWasPlaying = !!engine && !engine.isLive && engine.isPlaying;
+		const seconds = deliverSeconds;
+		const generation = ++recordGeneration;
+
+		releaseExport();
+		recordStarting = true;
+		recordKeepsAudio = audioWasPlaying;
+		recordFormat = format;
+		recordElapsed = 0;
+		recordTotal = seconds;
+		recordDetail = '';
+		if (engine && !engine.isLive) {
+			audioPlaying = audioWasPlaying;
+			// Request audio activation before the first await loses the
+			// transient click gesture (important on autoplay-restricted hosts).
+			engine.activate();
+		}
+
+		// Let the new stage framing settle before the renderer is resized.
+		await tick();
+		await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+		if (!mounted || generation !== recordGeneration) return;
+
+		instance.setExportSize(format.width, format.height);
+
+		let created: FrameRecorder;
+		try {
+			created = await FrameRecorder.create({
+				canvas: canvasEl,
+				audioStream: engine?.getRecordStream() ?? null,
+				width: format.width,
+				height: format.height,
+				fps: format.fps,
+				bitrate: format.bitrate,
+				sampleRate: engine?.sampleRate ?? 48_000,
+				duration: seconds
+			});
+		} catch (error) {
+			if (!mounted || generation !== recordGeneration) return;
+			recordStarting = false;
+			exportError = error instanceof Error ? error.message : 'Recording could not start.';
+			return;
+		}
+		if (!mounted || generation !== recordGeneration) {
+			created.abort();
+			return;
+		}
+
+		recorder = created;
+		recordDetail = created.detail;
+		instance.setFrameHook((canvas) => {
+			try {
+				created.pushFrame(canvas);
+			} catch (error) {
+				exportError = error instanceof Error ? error.message : 'Recording failed.';
+				void stopRecording(false);
+			}
+		});
+
+		// A silent field is reset to the image and opened by the sound. A track
+		// that is already running keeps its motion: the take joins mid-flight.
+		if (!audioWasPlaying) instance.reassemble();
+		if (engine && audioLoaded && !audioLive) {
+			const controller = new AbortController();
+			recordPlaybackAbort = controller;
+			const playbackAborted = new Promise<never>((_, reject) => {
+				controller.signal.addEventListener(
+					'abort',
+					() => reject(new Error('Audio playback could not start. Try again after pressing Play.')),
+					{ once: true }
+				);
+			});
+			const timeout = window.setTimeout(() => controller.abort(), 5_000);
+			try {
+				await Promise.race([engine.play(controller.signal), playbackAborted]);
+				audioPlaying = true;
+			} catch (error) {
+				audioPlaying = false;
+				exportError = error instanceof Error ? error.message : 'Audio playback could not start.';
+				await stopRecording(false);
+				return;
+			} finally {
+				window.clearTimeout(timeout);
+				if (recordPlaybackAbort === controller) recordPlaybackAbort = null;
+			}
+		}
+		if (!mounted || generation !== recordGeneration) return;
+
+		recordStarting = false;
+		recording = true;
+		recordStart = performance.now();
+		recordTimer = window.setInterval(() => {
+			const elapsed = (performance.now() - recordStart) / 1000;
+			recordElapsed = Math.min(seconds, elapsed);
+			if (elapsed >= seconds) void stopRecording(true);
+		}, 100);
+	}
+
+	async function stopRecording(keep: boolean) {
+		if (recordFinalizing || (!recordStarting && !recording && !recorder)) return;
+		const generation = ++recordGeneration;
+		recordPlaybackAbort?.abort();
+		recordPlaybackAbort = null;
+		const format = recordFormat ?? activeFormat ?? EXPORT_FORMATS[0];
+		if (recordTimer) window.clearInterval(recordTimer);
+		recordTimer = 0;
+
+		const instance = field;
+		instance?.setFrameHook(null);
+		const active = recorder;
+		recording = false;
+		recordStarting = false;
+		if (!audioEngine?.isLive) {
+			// Only stop the transport if the take started it. Recording a
+			// performance should not eject the performer.
+			if (recordKeepsAudio && audioEngine) {
+				audioPlaying = true;
+			} else {
+				audioPlaying = false;
+				audioEngine?.pause();
+			}
+			recordKeepsAudio = false;
+		}
+		recordFormat = null;
+		if (!active) return;
+		if (!keep) {
+			active.abort();
+			recorder = null;
+			return;
+		}
+
+		recordFinalizing = true;
+		try {
+			const result = await active.stop();
+			if (!mounted || generation !== recordGeneration) return;
+			const name = `distort-${format.id}-${result.width}x${result.height}.${result.extension}`;
+			releaseExport();
+			exportUrl = URL.createObjectURL(result.blob);
+			exportResult = {
+				url: exportUrl,
+				name,
+				size: result.blob.size,
+				width: result.width,
+				height: result.height,
+				duration: result.duration,
+				encoder: result.encoder,
+				detail: result.detail,
+				hasAudio: result.hasAudio
+			};
+
+			// Hand the file straight to the browser; a take that only lives in
+			// an object URL is easy to lose.
+			const anchor = document.createElement('a');
+			anchor.href = exportUrl;
+			anchor.download = name;
+			anchor.click();
+		} catch (error) {
+			if (mounted && generation === recordGeneration) {
+				exportError = error instanceof Error ? error.message : 'The take could not be finished.';
+			}
+		} finally {
+			if (recorder === active) recorder = null;
+			if (mounted) recordFinalizing = false;
+		}
 	}
 
 	function choosePreset(id: PresetId) {
@@ -479,8 +859,8 @@
 				<div class="panel-eyebrow"><span>( 01 — Instrument )</span><span>WebGL / 2D</span></div>
 				<h1 class="panel-title">An image,<br />in dust.</h1>
 				<p class="panel-lede">
-					A photograph is sampled into <strong>{fmtCount(params.particleCount)}</strong> points and held
-					in a slow field. Move the pointer to pull it apart; let go to bring it home.
+					The full photograph stays visible beneath <strong>{fmtCount(params.particleCount)}</strong>
+					points. Sound refracts the image; move the pointer to pull its grain apart.
 				</p>
 				<div class="panel-spec">
 					<span><b>{stats ? fmtCount(stats.count) : fmtCount(params.particleCount)}</b> points</span>
@@ -583,18 +963,152 @@
 					</div>
 				{:else}
 					<p class="empty-copy">
-						Drop a photograph into the stage. It is analysed once, then broken into fine points.
+						Drop a photograph into the stage. Its pixels stay whole while a second, fine-grained
+						particle field is sampled from it.
 					</p>
 				{/if}
 			</Section>
 
-			<Section title="Audio" kicker="02" open={true}>
+			<Section title="Image / optics" kicker="02" open={true}>
+				<Toggle
+					label="Continuous image"
+					bind:checked={params.photo.enabled}
+					hint="The complete photograph sits beneath the particle field. Turn off for the original dot-only look."
+				/>
+				{#if params.photo.enabled}
+					<Slider
+						label="Particles"
+						bind:value={params.photo.particles}
+						min={0} max={1} step={0.01} format={fmt2}
+						hint="0 = photograph alone, 1 = dots alone. Default keeps every part of the source readable."
+					/>
+					<Slider
+						label="Break"
+						bind:value={params.photo.amount}
+						min={0} max={1} step={0.01} format={fmt2}
+						hint="Master optical destruction. At 0 the photograph is intact; at 1 the effects can tear it beyond recognition."
+					/>
+					<Slider
+						label="Refraction"
+						bind:value={params.photo.refraction}
+						min={0} max={1} step={0.01} format={fmt2}
+						hint="Liquid glass follows the actual image contours. Bass moves the lens."
+					/>
+					<Slider
+						label="Folds"
+						bind:value={params.photo.folds}
+						min={0} max={1} step={0.01} format={fmt2}
+						hint="The photograph bends into displaced strips; beats pull them sideways."
+					/>
+					<Slider
+						label="Blocks"
+						bind:value={params.photo.blocks}
+						min={0} max={1} step={0.01} format={fmt2}
+						hint="Stable fragments and pixelation; treble opens the gaps. At max the image can disintegrate."
+					/>
+					<Slider
+						label="Chromatic split"
+						bind:value={params.photo.chroma}
+						min={0} max={1} step={0.01} format={fmt2}
+						hint="RGB channels part along the contours, without removing the underlying pixels."
+					/>
+					<p class="grade-hint">All optics are audio-led. Without sound the complete source stays legible. Push Break and the effects to 1 with Motion at 1 for full deconstruction.</p>
+				{/if}
+			</Section>
+
+			<Section title="Form" kicker="03" open={true}>
+				<Toggle
+					label="Image surface"
+					bind:checked={params.form.enabled}
+					hint="Refraction, cells, slices and relief are read from the photograph itself."
+				/>
+
+				{#if params.form.enabled}
+					<Slider
+						label="Lens"
+						bind:value={params.form.lens}
+						min={0}
+						max={1}
+						step={0.01}
+						format={fmt2}
+						hint="Bends contours along their own gradient. Bass opens it first, so edges shimmer before anything moves."
+					/>
+					<Slider
+						label="Raster"
+						bind:value={params.form.raster}
+						min={0}
+						max={1}
+						step={0.01}
+						format={fmt2}
+						hint="Cuts the image into its own cells and lets each pane drift. Treble opens it."
+					/>
+					<Slider
+						label="Slices"
+						bind:value={params.form.slice}
+						min={0}
+						max={1}
+						step={0.01}
+						format={fmt2}
+						hint="Lifts horizontal bands sideways, keeping their colour. Beats open it."
+					/>
+					<Slider
+						label="Relief"
+						bind:value={params.form.relief}
+						min={0}
+						max={1}
+						step={0.01}
+						format={fmt2}
+						hint="Raises bright structure toward the viewer. Loudness opens it."
+					/>
+					<p class="grade-hint">
+						All four share the Motion gate. Silent, the photograph is simply itself; the sound decides
+						how far the surface opens.
+					</p>
+				{/if}
+			</Section>
+
+			<Section title="Audio" kicker="04" open={true}>
 				<button class="upload" onclick={() => audioEl.click()} type="button">
 					<span>{audioLoaded ? 'Replace audio' : 'Choose audio'}</span>
 					<span class="upload-plus" aria-hidden="true">{audioLoaded ? '↺' : '+'}</span>
 				</button>
 
-				{#if audioLoaded}
+				<div class="audio-source" role="group" aria-label="Live input">
+					<button
+						type="button"
+						class:active={audioLive && audioLiveName === 'System audio'}
+						aria-pressed={audioLive && audioLiveName === 'System audio'}
+						onclick={startSystemAudio}
+					>
+						System audio
+					</button>
+					<button
+						type="button"
+						class:active={audioLive && audioLiveName === 'Microphone'}
+						aria-pressed={audioLive && audioLiveName === 'Microphone'}
+						onclick={startMicrophone}
+					>
+						Microphone
+					</button>
+				</div>
+				<p class="audio-hint">
+					System audio follows whatever the machine plays — Spotify, a DAW, another tab. It is
+					analysed only and never replayed through the speakers.
+				</p>
+
+				{#if audioLive}
+					<div class="audio-meta">
+						<span class="filename">{audioLiveName}</span>
+						<span class="dims">live</span>
+					</div>
+					<div class="audio-transport">
+						<button type="button" onclick={stopLive} aria-label="Stop live input">
+							<span>Stop</span>
+							<span aria-hidden="true">■</span>
+						</button>
+						<span class="audio-time">listening</span>
+					</div>
+				{:else if audioLoaded}
 					<div class="audio-meta">
 						<span class="filename" title={audioName}>{audioName}</span>
 						<span class="dims">{fmtTime(audioDuration)}</span>
@@ -625,8 +1139,8 @@
 					</label>
 				{:else}
 					<p class="empty-copy">
-						The image stands still until you play. Add a track and its spectrum opens the motion —
-						decoded locally, never uploaded.
+						The image stands still until sound arrives. Add a track, capture system audio, or open
+						the microphone — the spectrum opens the motion.
 					</p>
 				{/if}
 
@@ -692,7 +1206,200 @@
 				</div>
 			</Section>
 
-			<Section title="Presets" kicker="03" open={true}>
+			<Section title="Export" kicker="05" open={true}>
+				<div class="block-label">
+					<span>Frame</span>
+					<span>{activeFormat ? activeFormat.note : 'as shown'}</span>
+				</div>
+				<div class="chips export-chips frame-chips" role="group" aria-label="Frame and delivery size">
+					<button
+						type="button"
+						class:active={frame === 'stage'}
+						aria-pressed={frame === 'stage'}
+						disabled={exportBusy}
+						onclick={() => chooseFrame('stage')}
+					>
+						Stage
+					</button>
+					{#each EXPORT_FORMATS as option (option.id)}
+						<button
+							type="button"
+							class:active={frame === option.id}
+							aria-pressed={frame === option.id}
+							disabled={exportBusy}
+							onclick={() => chooseFrame(option.id)}
+						>
+							{option.label}
+						</button>
+					{/each}
+					<button
+						type="button"
+						class:active={frame === 'custom'}
+						aria-pressed={frame === 'custom'}
+						disabled={exportBusy}
+						onclick={() => chooseFrame('custom')}
+					>
+						Custom
+					</button>
+				</div>
+
+				{#if frame === 'custom'}
+					<div class="custom-size">
+						<label for="custom-export-width">Width</label>
+						<input
+							id="custom-export-width"
+							type="number"
+							min={MIN_EXPORT_EDGE}
+							max={MAX_EXPORT_EDGE}
+							step="2"
+							bind:value={customWidth}
+							onchange={() => (customWidth = normalizeEdge(customWidth))}
+							disabled={exportBusy}
+						/>
+						<span aria-hidden="true">×</span>
+						<label for="custom-export-height">Height</label>
+						<input
+							id="custom-export-height"
+							type="number"
+							min={MIN_EXPORT_EDGE}
+							max={MAX_EXPORT_EDGE}
+							step="2"
+							bind:value={customHeight}
+							onchange={() => (customHeight = normalizeEdge(customHeight))}
+							disabled={exportBusy}
+						/>
+					</div>
+					<p class="grade-hint">
+						Any width × height from {MIN_EXPORT_EDGE} to {MAX_EXPORT_EDGE} px, snapped to even
+						numbers. The H.264 level follows the frame size. Instagram downscales anything above
+						1080 px.
+					</p>
+				{/if}
+
+				{#if activeFormat}
+					<div class="export-spec">
+						<span><b>{activeFormat.width} × {activeFormat.height}</b></span>
+						<span>{activeFormat.fps} fps</span>
+						<span>{formatMbps(activeFormat.bitrate)}</span>
+						<span>H.264 target</span>
+					</div>
+					<p class="grade-hint">
+						Target size ~{formatBytes(estimateBytes(activeFormat, deliverSeconds))} for a
+						{deliverSeconds.toFixed(0)} s take. MP4 / H.264, AAC 192 kbps when audio is selected.
+						The browser chooses the supported encoder; actual size varies.
+					</p>
+				{:else}
+					<p class="grade-hint">
+						<b>Stage</b> records the current composition at 1080 px on its long edge. Pick
+						<b>Reel</b> for 9:16, <b>Post</b> for 4:5, or <b>Custom</b> for any width × height. The
+						stage reframes to the chosen aspect, so the preview and the file are the same
+						composition.
+					</p>
+				{/if}
+
+				<div class="block-label"><span>Take</span><span>{deliverSeconds.toFixed(0)} s</span></div>
+				<div class="chips export-chips" role="group" aria-label="Take length">
+					<button
+						type="button"
+						class:active={exportSeconds === 0}
+						aria-pressed={exportSeconds === 0}
+						disabled={exportBusy}
+						onclick={() => (exportSeconds = 0)}
+					>
+						Track
+					</button>
+					{#each [30, 60, 120, 180] as seconds (seconds)}
+						<button
+							type="button"
+							class:active={exportSeconds === seconds}
+							aria-pressed={exportSeconds === seconds}
+							disabled={exportBusy}
+							onclick={() => (exportSeconds = seconds)}
+						>
+							{seconds}s
+						</button>
+					{/each}
+				</div>
+				<div class="custom-take">
+					<label for="custom-take-seconds">Custom seconds (1–300)</label>
+					<input
+						id="custom-take-seconds"
+						type="number"
+						min="1"
+						max="300"
+						step="1"
+						bind:value={customSeconds}
+						disabled={exportBusy}
+						onfocus={() => (exportSeconds = -1)}
+						oninput={() => (exportSeconds = -1)}
+					/>
+				</div>
+				<p class="grade-hint">
+					Default 60 s. Track uses the file's duration (up to 300 s); without a file it means 60 s.
+					Short tracks loop to fill longer takes. Recording joins the audio where it is playing, so
+					pressing Record never restarts the track. Long takes stay in browser memory until download;
+					choose a shorter take if memory is limited.
+				</p>
+
+				<button
+					class="record"
+					type="button"
+					class:recording
+					disabled={recordStarting || recordFinalizing || loading || audioLoading}
+					onclick={() => (recording ? stopRecording(true) : startRecording())}
+				>
+					<span>{recordStarting ? 'Preparing…' : recordFinalizing ? 'Finishing…' : recording ? 'Stop and keep' : 'Record take'}</span>
+					<span class="record-dot" aria-hidden="true"></span>
+				</button>
+
+				{#if recording}
+					<div class="record-progress" aria-hidden="true">
+						<span style:width={`${recordProgress * 100}%`}></span>
+					</div>
+					<p class="grade-hint">
+						{recordElapsed.toFixed(1)} / {recordTotal.toFixed(1)} s — encoded while it plays. Leave the
+						tab visible.
+					</p>
+				{/if}
+
+				{#if recordDetail && !recording}
+					<p class="grade-hint">{recordDetail}</p>
+				{/if}
+
+				{#if exportError}
+					<p class="export-error" role="alert">{exportError}</p>
+				{/if}
+
+				{#if exportResult}
+					<div class="export-out">
+						<div class="audio-meta">
+							<span class="filename" title={exportResult.name}>{exportResult.name}</span>
+							<span class="dims">{formatBytes(exportResult.size)}</span>
+						</div>
+						<p class="grade-hint">
+							{exportResult.width} × {exportResult.height} · {exportResult.duration.toFixed(1)} s ·
+							{exportResult.encoder}
+						</p>
+						<a class="download" href={exportResult.url} download={exportResult.name}>
+							<span>Download</span><span aria-hidden="true">↓</span>
+						</a>
+						<p class="grade-hint">
+							{exportResult.hasAudio
+								? 'Audio is muxed in.'
+								: 'Silent file — add the track in the Instagram editor.'}
+							{exportResult.detail}
+						</p>
+					</div>
+				{/if}
+
+				<p class="grade-hint">
+					Instagram re-encodes every upload; lossless delivery cannot be guaranteed.
+					Upload the exported file directly and enable “Upload at highest quality” in Instagram.
+					WebCodecs targets 30 fps; the browser recorder is the fallback.
+				</p>
+			</Section>
+
+			<Section title="Presets" kicker="06" open={true}>
 				<div class="presets">
 					{#each PRESETS as preset, index}
 						<button
@@ -739,7 +1446,7 @@
 				<button class="ghost" type="button" onclick={randomize}>Randomize look</button>
 			</Section>
 
-			<Section title="Particles" kicker="04" open={true}>
+			<Section title="Particles" kicker="07" open={true}>
 				<Slider
 					label="Count"
 					bind:value={params.particleCount}
@@ -768,7 +1475,7 @@
 				/>
 			</Section>
 
-			<Section title="Flow field" kicker="05" open={true}>
+			<Section title="Flow field" kicker="08" open={true}>
 				<Toggle label="Curl noise" bind:checked={params.curlEnabled} />
 				<Slider
 					label="Strength"
@@ -796,7 +1503,7 @@
 				/>
 			</Section>
 
-			<Section title="Return" kicker="06">
+			<Section title="Return" kicker="09">
 				<Toggle label="Spring to origin" bind:checked={params.springEnabled} />
 				<Slider
 					label="Stiffness"
@@ -824,7 +1531,7 @@
 				/>
 			</Section>
 
-			<Section title="Pointer" kicker="07">
+			<Section title="Pointer" kicker="10">
 				<Toggle label="Pointer force" bind:checked={params.pointerEnabled} />
 				<Slider
 					label="Attract / repel"
@@ -853,7 +1560,7 @@
 				/>
 			</Section>
 
-			<Section title="Pulse" kicker="08">
+			<Section title="Pulse" kicker="11">
 				<Toggle label="Radial pulse" bind:checked={params.pulseEnabled} />
 				<Toggle
 					label="Auto pulse"
@@ -878,7 +1585,7 @@
 				/>
 			</Section>
 
-			<Section title="Wave" kicker="09">
+			<Section title="Wave" kicker="12">
 				<Toggle label="Traveling ring" bind:checked={params.waveEnabled} />
 				<Slider
 					label="Strength"
@@ -906,7 +1613,7 @@
 				/>
 			</Section>
 
-			<Section title="Fracture" kicker="10">
+			<Section title="Fracture" kicker="13">
 				<Toggle
 					label="Voronoi shards"
 					bind:checked={params.fractureEnabled}
@@ -938,7 +1645,7 @@
 				/>
 			</Section>
 
-			<Section title="Depth" kicker="11">
+			<Section title="Depth" kicker="14">
 				<Toggle
 					label="Depth scatter"
 					bind:checked={params.depthEnabled}
@@ -954,7 +1661,7 @@
 				/>
 			</Section>
 
-			<Section title="Modulation" kicker="12" open={false}>
+			<Section title="Modulation" kicker="15" open={false}>
 				<div class="lfo-head">
 					<span>4 routes · retrigger</span>
 					<button type="button" class="mini-button" onclick={triggerAllLfos}>Trigger all</button>
@@ -978,6 +1685,14 @@
 								<option value="depth">Depth</option>
 								<option value="size">Size</option>
 								<option value="opacity">Opacity</option>
+								<optgroup label="Image / optics">
+									<option value="photoParticles">Particles mix</option>
+									<option value="photoBreak">Break</option>
+									<option value="photoRefraction">Refraction</option>
+									<option value="photoFolds">Folds</option>
+									<option value="photoBlocks">Blocks</option>
+									<option value="photoChroma">Chromatic split</option>
+								</optgroup>
 							</select>
 							<select
 								bind:value={params.lfos[index].shape}
@@ -1046,7 +1761,8 @@
 
 				<p class="lfo-hint">
 					Each route multiplies one parameter by <code>1 + signal × depth</code>. Retrigger restarts
-					the phase and swells the route back in; phases survive preset changes.
+					the phase and swells the route back in; phases survive preset changes. Image / optics
+					routes modulate while audio is present. A control at 0 stays off.
 				</p>
 			</Section>
 
@@ -1059,29 +1775,37 @@
 			</footer>
 		</aside>
 
+		<div class="stage-slot">
 		<main
 			bind:this={stageEl}
 			class="stage"
 			class:dragging={dragActive}
+			class:framed={frame !== 'stage'}
+			style:aspect-ratio={activeFormat?.aspect}
+			style:--frame-aspect={activeFormat ? activeFormat.width / activeFormat.height : 1}
 			ondragover={handleDragOver}
 			ondragleave={handleDragLeave}
 			ondrop={handleDrop}
 		>
-			<canvas bind:this={canvasEl} aria-label="GPU particle field"></canvas>
+			<canvas bind:this={canvasEl} aria-label="Audio-reactive photograph and particle field"></canvas>
 
 			<div class="ticks" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
 
 			<div class="stage-line stage-line-top">
 				<span>Fig. 01 — Portrait in dust</span>
 				<span class="hud" aria-live="off">
-					{stats ? stats.fps.toFixed(0) : '—'} fps / {hudCount}
+					{recording ? 'REC' : `${stats ? stats.fps.toFixed(0) : '—'} fps`} / {hudCount}
 				</span>
 			</div>
 
 			<div class="stage-line stage-line-bottom">
 				<span>{analysis ? 'Move pointer to distort' : 'Input — JPG / PNG / WebP'}</span>
 				<span>
-					{stats ? `${stats.textureSize}² / ${stats.precision}` : 'WebGL2 / render-to-float'}
+					{activeFormat
+						? `${activeFormat.width}×${activeFormat.height} · ${activeFormat.fps} fps`
+						: stats
+							? `${stats.textureSize}² / ${stats.precision}`
+							: 'WebGL2 / render-to-float'}
 				</span>
 			</div>
 
@@ -1107,6 +1831,7 @@
 				</div>
 			{/if}
 		</main>
+		</div>
 	</div>
 </div>
 
@@ -1470,6 +2195,199 @@
 	}
 	.audio-axis span:last-child {
 		text-align: right;
+	}
+	.audio-toggle {
+		display: grid;
+		grid-template-columns: repeat(3, 1fr);
+		border: 1px solid var(--ink);
+	}
+	.audio-source {
+		display: grid;
+		grid-template-columns: 1fr 1fr;
+		margin-top: 6px;
+		border: 1px solid var(--ink);
+	}
+	.audio-source button {
+		padding: 7px 0;
+		border: 0;
+		background: transparent;
+		color: var(--muted);
+		font-family: var(--mono);
+		font-size: 7px;
+		letter-spacing: 0.03em;
+		text-transform: uppercase;
+		transition:
+			background 120ms ease,
+			color 120ms ease;
+	}
+	.audio-source button + button {
+		border-left: 1px solid var(--line-strong);
+	}
+	.audio-source button:disabled {
+		opacity: 0.3;
+		cursor: not-allowed;
+	}
+	.audio-source button:hover:not(:disabled) {
+		color: var(--ink);
+	}
+	.audio-source button.active {
+		background: var(--ink);
+		color: var(--paper);
+	}
+	.audio-hint {
+		margin: 6px 0 10px;
+		font-family: var(--mono);
+		font-size: 7px;
+		line-height: 1.6;
+		text-transform: uppercase;
+		color: var(--muted);
+	}
+
+	.chips.export-chips {
+		grid-template-columns: repeat(5, minmax(0, 1fr));
+		margin-bottom: 8px;
+	}
+	.chips.frame-chips {
+		grid-template-columns: repeat(4, minmax(0, 1fr));
+	}
+	.custom-size {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		margin: 7px 0;
+		font-family: var(--mono);
+		font-size: 8px;
+		text-transform: uppercase;
+		color: var(--ink-soft);
+	}
+	.custom-size input {
+		flex: 1 1 auto;
+		min-width: 0;
+		padding: 5px 7px;
+		border: 1px solid var(--line-strong);
+		border-radius: 0;
+		background: var(--paper);
+		color: var(--ink);
+		font: inherit;
+	}
+	.custom-take {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 12px;
+		margin: 6px 0;
+		font-family: var(--mono);
+		font-size: 8px;
+		text-transform: uppercase;
+		color: var(--ink-soft);
+	}
+	.custom-take input {
+		width: 68px;
+		padding: 5px 7px;
+		border: 1px solid var(--line-strong);
+		border-radius: 0;
+		background: var(--paper);
+		color: var(--ink);
+		font: inherit;
+	}
+	.export-spec {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 3px 10px;
+		margin: 7px 0 5px;
+		font-family: var(--mono);
+		font-size: 7px;
+		letter-spacing: 0.03em;
+		text-transform: uppercase;
+		color: var(--muted);
+	}
+	.export-spec b {
+		font-weight: 500;
+		color: var(--ink);
+	}
+	.record {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		width: 100%;
+		margin: 10px 0 8px;
+		padding: 10px 11px;
+		border: 1px solid var(--ink);
+		background: var(--ink);
+		color: var(--paper);
+		font-family: var(--mono);
+		font-size: 9px;
+		letter-spacing: 0.03em;
+		text-transform: uppercase;
+		transition:
+			background 120ms ease,
+			color 120ms ease;
+	}
+	.record:hover {
+		background: var(--paper);
+		color: var(--ink);
+	}
+	.record.recording {
+		background: transparent;
+		color: var(--ink);
+	}
+	.record:disabled,
+	.export-chips button:disabled {
+		cursor: wait;
+		opacity: 0.55;
+	}
+	.record-dot {
+		width: 7px;
+		height: 7px;
+		border-radius: 50%;
+		background: #bb4a2f;
+	}
+	.record.recording .record-dot {
+		background: var(--ink);
+	}
+	.record-progress {
+		height: 3px;
+		margin: 0 0 6px;
+		background: var(--line-strong);
+	}
+	.record-progress span {
+		display: block;
+		height: 100%;
+		background: var(--ink);
+		transition: width 120ms linear;
+	}
+	.export-out {
+		margin: 6px 0 8px;
+	}
+	.download {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		margin-top: 6px;
+		padding: 8px 10px;
+		border: 1px solid var(--ink);
+		color: var(--ink);
+		font-family: var(--mono);
+		font-size: 9px;
+		letter-spacing: 0.03em;
+		text-transform: uppercase;
+		text-decoration: none;
+		transition:
+			background 120ms ease,
+			color 120ms ease;
+	}
+	.download:hover {
+		background: var(--ink);
+		color: var(--paper);
+	}
+	.export-error {
+		margin: 6px 0 8px;
+		padding: 6px 8px;
+		border: 1px solid #bb4a2f;
+		font-family: var(--mono);
+		font-size: 8px;
+		line-height: 1.5;
+		color: #bb4a2f;
 	}
 	.audio-toggle {
 		display: grid;
@@ -1963,9 +2881,19 @@
 		color: var(--muted);
 	}
 
+	.stage-slot {
+		container-type: size;
+		display: grid;
+		place-items: center;
+		min-width: 0;
+		min-height: 0;
+		background: var(--stage);
+	}
 	.stage {
 		position: relative;
 		min-width: 0;
+		width: 100%;
+		height: 100%;
 		overflow: hidden;
 		background: var(--stage);
 		color: var(--stage-ink);
@@ -1978,6 +2906,13 @@
 		height: 100%;
 		touch-action: none;
 		cursor: crosshair;
+	}
+	/* A chosen delivery format reframes the stage, so the preview and the file
+	   are the same composition. The renderer is later asked for 1080 px. */
+	.stage.framed {
+		width: min(100cqw, calc(100cqh * var(--frame-aspect)));
+		height: auto;
+		outline: 1px solid var(--line-strong);
 	}
 
 	.ticks {
@@ -2233,8 +3168,10 @@
 			flex-direction: column;
 			overflow: visible;
 		}
-		.stage {
+		.stage-slot {
 			order: 1;
+			flex: none;
+			width: 100%;
 			height: 58dvh;
 			min-height: 330px;
 			max-height: 620px;

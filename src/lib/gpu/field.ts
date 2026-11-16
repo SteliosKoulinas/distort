@@ -8,6 +8,7 @@ import type { DecodedImage } from '#lib/image/decode';
 import { sampleParticles, type SampledParticles } from '#lib/image/sample';
 import { resolvePalette, paletteLevels } from '#lib/core/palette';
 import { hexToLinearRgb } from '#lib/core/color';
+import { buildNormalField } from './normals';
 import { GpuSimulation, type PointerState } from './simulation';
 import { ParticleView } from './view';
 
@@ -64,6 +65,7 @@ export class ParticleField {
 	private source: Source | null = null;
 	private sim: GpuSimulation | null = null;
 	private raf = 0;
+	private frameHook: ((canvas: HTMLCanvasElement) => void) | null = null;
 	private lastTime = 0;
 	private time = 0;
 	private frameCount = 0;
@@ -153,8 +155,29 @@ export class ParticleField {
 
 	setSource(analysis: ImageAnalysis, image: DecodedImage): void {
 		this.source = { analysis, image };
+		// The surface is a property of the photograph: build it once, here,
+		// not on every resample.
+		this.view.setNormals(buildNormalField(analysis));
+		this.view.setPhoto(image);
 		this.build();
 		this.start();
+	}
+
+	/**
+	 * Render at delivery size while the stage keeps its CSS size. Used by the
+	 * recorder so the preview and the file are the same composition.
+	 */
+	setExportSize(width: number, height: number): void {
+		this.view.setExportSize(width, height);
+	}
+
+	clearExportSize(): void {
+		this.view.clearExportSize();
+	}
+
+	/** Called once per rendered frame, after the canvas has the new image. */
+	setFrameHook(hook: ((canvas: HTMLCanvasElement) => void) | null): void {
+		this.frameHook = hook;
 	}
 
 	/** Re-run decomposition + sampling with the current params. */
@@ -201,6 +224,7 @@ export class ParticleField {
 
 	dispose(): void {
 		this.stop();
+		this.frameHook = null;
 		this.observer.disconnect();
 		this.canvas.removeEventListener('pointermove', this.handlePointerMove);
 		this.canvas.removeEventListener('pointerdown', this.handlePointerMove);
@@ -281,6 +305,12 @@ export class ParticleField {
 		mod.depth = 1;
 		mod.size = 1;
 		mod.opacity = 1;
+		mod.photoParticles = 1;
+		mod.photoBreak = 1;
+		mod.photoRefraction = 1;
+		mod.photoFolds = 1;
+		mod.photoBlocks = 1;
+		mod.photoChroma = 1;
 
 		const lfos = this.params.lfos;
 		for (let i = 0; i < lfos.length && i < this.lfoRuntime.length; i++) {
@@ -322,6 +352,11 @@ export class ParticleField {
 		this.audioEnergy += (amp - this.audioEnergy) * follow;
 		const gate = audio && audio.reactive ? audio.motion : 0;
 		const motion = this.idleMotion + (1 - this.idleMotion) * gate * this.audioEnergy;
+		// Photo optics have a separate normalized response: quiet playing audio
+		// can fully open them at max, while actual silence remains unchanged.
+		const audioResponse = audio.reactive
+			? Math.max(0, Math.min(1, (this.audioEnergy - 0.015) * 8)) * audio.motion
+			: 0;
 
 		if (this.params.autoPulse && this.params.pulseEnabled) {
 			this.autoPulseClock += dt;
@@ -354,7 +389,8 @@ export class ParticleField {
 					motion,
 					this.assembly
 				);
-				this.view.render(this.sim.positionTexture, this.time, this.modulation, this.audio, motion);
+				this.view.render(this.sim.positionTexture, this.time, this.modulation, this.audio, motion, audioResponse);
+				this.frameHook?.(this.canvas);
 			}
 		} catch (error) {
 			this.stop();
