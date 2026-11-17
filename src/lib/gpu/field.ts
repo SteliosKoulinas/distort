@@ -9,6 +9,7 @@ import { sampleParticles, type SampledParticles } from '#lib/image/sample';
 import { resolvePalette, paletteLevels } from '#lib/core/palette';
 import { hexToLinearRgb } from '#lib/core/color';
 import { buildNormalField } from './normals';
+import { buildStructureField } from '#lib/image/structure';
 import { GpuSimulation, type PointerState } from './simulation';
 import { ParticleView } from './view';
 
@@ -158,6 +159,7 @@ export class ParticleField {
 		// The surface is a property of the photograph: build it once, here,
 		// not on every resample.
 		this.view.setNormals(buildNormalField(analysis));
+		this.view.setStructure(buildStructureField(analysis));
 		this.view.setPhoto(image);
 		this.build();
 		this.start();
@@ -378,7 +380,7 @@ export class ParticleField {
 		this.updateModulation(dt);
 
 		try {
-			if (this.sim) {
+			if (this.sim && this.params.visualEngine === 'particles') {
 				this.sim.step(
 					dt,
 					this.time,
@@ -390,6 +392,11 @@ export class ParticleField {
 					this.assembly
 				);
 				this.view.render(this.sim.positionTexture, this.time, this.modulation, this.audio, motion, audioResponse);
+			} else if (this.source) {
+				// Structural Erosion is a continuous image engine. The
+				// simulation remains allocated for fast A/B switching, but it
+				// is not stepped or drawn while this mode is active.
+				this.view.render(null, this.time, this.modulation, this.audio, motion, audioResponse);
 				this.frameHook?.(this.canvas);
 			}
 		} catch (error) {

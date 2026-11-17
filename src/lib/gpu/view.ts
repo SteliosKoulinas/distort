@@ -1,12 +1,20 @@
 import * as THREE from 'three';
 import type { SampledParticles } from '#lib/image/sample';
-import type { FormSettings, Modulation, PhotoSettings, SimParams } from '#lib/core/params';
+import type {
+	FormSettings,
+	Modulation,
+	PhotoSettings,
+	SimParams,
+	StructuralSettings
+} from '#lib/core/params';
 import type { AudioFrame } from '#lib/audio/types';
 import type { DecodedImage } from '#lib/image/decode';
 import type { NormalField } from './normals';
+import type { StructureField } from '#lib/image/structure';
 import { modulatePhotoValue } from '#lib/core/photo-modulation';
 import { renderFragmentShader, renderVertexShader } from './shaders/render';
 import { photoFragmentShader, photoVertexShader } from './shaders/photo';
+import { structuralFragmentShader, structuralVertexShader } from './shaders/structural';
 
 const MAX_DPR = 1.5;
 
@@ -28,7 +36,10 @@ export class ParticleView {
 	private readonly material: THREE.ShaderMaterial;
 	private readonly photoMaterial: THREE.ShaderMaterial;
 	private readonly photoMesh: THREE.Mesh;
+	private readonly structuralMaterial: THREE.ShaderMaterial;
+	private readonly structuralMesh: THREE.Mesh;
 	private photoTexture: THREE.DataTexture | null = null;
+	private structureTexture: THREE.DataTexture | null = null;
 	private points: THREE.Points | null = null;
 	private stageWidth = 1;
 	private stageHeight = 1;
@@ -48,6 +59,13 @@ export class ParticleView {
 	private photo: PhotoSettings = {
 		enabled: true, particles: 0.12, amount: 0.32,
 		refraction: 0.65, folds: 0.4, blocks: 0.28, chroma: 0.3
+	};
+	private visualEngine: SimParams['visualEngine'] = 'particles';
+	private structural: StructuralSettings = {
+		intensity: 0.72,
+		sensitivity: 0.82,
+		recovery: 0.58,
+		scale: 0.42
 	};
 	/** Delivery size override. While set, the canvas renders at exactly this. */
 	private exportSize: { width: number; height: number } | null = null;
@@ -114,6 +132,36 @@ export class ParticleView {
 		this.photoMesh.renderOrder = -1;
 		this.photoMesh.frustumCulled = false;
 		this.scene.add(this.photoMesh);
+
+		this.structuralMaterial = new THREE.ShaderMaterial({
+			uniforms: {
+				uImage: { value: null },
+				uStructure: { value: null },
+				uFit: { value: this.fit },
+				uTime: { value: 0 },
+				uIntensity: { value: 0.75 },
+				uSensitivity: { value: 0.8 },
+				uRecovery: { value: 0.55 },
+				uScale: { value: 0.45 },
+				uLow: { value: 0 },
+				uMid: { value: 0 },
+				uHigh: { value: 0 },
+				uFlux: { value: 0 },
+				uTransient: { value: 0 },
+				uOpacity: { value: 1 }
+			},
+			vertexShader: structuralVertexShader,
+			fragmentShader: structuralFragmentShader,
+			transparent: true,
+			depthTest: false,
+			depthWrite: false,
+			toneMapped: false
+		});
+		this.structuralMesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.structuralMaterial);
+		this.structuralMesh.visible = false;
+		this.structuralMesh.renderOrder = -2;
+		this.structuralMesh.frustumCulled = false;
+		this.scene.add(this.structuralMesh);
 
 		this.material = new THREE.ShaderMaterial({
 			uniforms: {
@@ -210,8 +258,42 @@ export class ParticleView {
 		this.photoTexture?.dispose();
 		this.photoTexture = texture;
 		this.photoMaterial.uniforms.uImage.value = texture;
+		this.structuralMaterial.uniforms.uImage.value = texture;
 		this.photoMaterial.uniforms.uImageSize.value.set(width, height);
 		this.photoMesh.visible = this.photo.enabled;
+	}
+
+	/** Upload structure-tensor channels for continuous image engines. */
+	setStructure(field: StructureField): void {
+		const pixels = new Uint8Array(field.width * field.height * 4);
+		for (let y = 0; y < field.height; y++) {
+			for (let x = 0; x < field.width; x++) {
+				const source = y * field.width + x;
+				const target = (field.height - y - 1) * field.width + x;
+				const offset = target * 4;
+				pixels[offset] = Math.round((field.directionX[source] * 0.5 + 0.5) * 255);
+				pixels[offset + 1] = Math.round((field.directionY[source] * 0.5 + 0.5) * 255);
+				pixels[offset + 2] = Math.round(field.coherence[source] * 255);
+				pixels[offset + 3] = Math.round(field.gradient[source] * 255);
+			}
+		}
+		const texture = new THREE.DataTexture(
+			pixels,
+			field.width,
+			field.height,
+			THREE.RGBAFormat,
+			THREE.UnsignedByteType
+		);
+		texture.minFilter = THREE.LinearFilter;
+		texture.magFilter = THREE.LinearFilter;
+		texture.generateMipmaps = false;
+		texture.wrapS = THREE.ClampToEdgeWrapping;
+		texture.wrapT = THREE.ClampToEdgeWrapping;
+		texture.colorSpace = THREE.NoColorSpace;
+		texture.needsUpdate = true;
+		this.structureTexture?.dispose();
+		this.structureTexture = texture;
+		this.structuralMaterial.uniforms.uStructure.value = texture;
 	}
 
 	/** The source's own relief. Rebuilt only when a new image is loaded. */
@@ -239,10 +321,12 @@ export class ParticleView {
 	}
 
 	setParams(params: SimParams): void {
+		this.visualEngine = params.visualEngine;
 		this.pointSize = params.pointSize;
 		this.opacity = params.opacity;
 		this.form = { ...params.form };
 		this.photo = { ...params.photo };
+		this.structural = { ...params.structural };
 		this.material.uniforms.uPointSize.value = params.pointSize;
 		this.material.uniforms.uOpacity.value = params.opacity;
 	}
@@ -303,11 +387,28 @@ export class ParticleView {
 		audioResponse: number
 	): void {
 		const photo = this.photo;
+		const structural = this.visualEngine === 'structural-erosion' && !!this.structureTexture;
 		const showPhoto = !!this.photoTexture && photo.enabled;
 		const photoParticles = showPhoto
 			? modulatePhotoValue(photo.particles, modulation.photoParticles, audioResponse)
 			: 1;
-		this.photoMesh.visible = showPhoto;
+		this.photoMesh.visible = showPhoto && !structural;
+		this.structuralMesh.visible = structural;
+		if (structural) {
+			const u = this.structuralMaterial.uniforms;
+			const features = audio.features;
+			u.uTime.value = time;
+			u.uIntensity.value = clamp01(this.structural.intensity);
+			u.uSensitivity.value = clamp01(this.structural.sensitivity);
+			u.uRecovery.value = clamp01(this.structural.recovery);
+			u.uScale.value = clamp01(this.structural.scale);
+			u.uLow.value = clamp01(features?.low ?? audio.bass);
+			u.uMid.value = clamp01(features?.mid ?? audio.mid);
+			u.uHigh.value = clamp01(features?.high ?? audio.treble);
+			u.uFlux.value = clamp01(features?.flux ?? audio.beat);
+			u.uTransient.value = clamp01(features?.transient ?? audio.beat);
+			u.uOpacity.value = 1;
+		}
 		if (showPhoto) {
 			const u = this.photoMaterial.uniforms;
 			u.uTime.value = time;
@@ -323,7 +424,7 @@ export class ParticleView {
 			u.uOpacity.value = 1 - photoParticles;
 		}
 		if (this.points) {
-			this.points.visible = positionTexture !== null;
+			this.points.visible = positionTexture !== null && !structural;
 			const u = this.material.uniforms;
 			// Point size and opacity only swell when the piece is actually
 			// moving, so a silent image keeps its printed grain.
@@ -354,8 +455,11 @@ export class ParticleView {
 		this.disposePoints();
 		this.normalTexture.dispose();
 		this.photoTexture?.dispose();
+		this.structureTexture?.dispose();
 		this.photoMesh.geometry.dispose();
 		this.photoMaterial.dispose();
+		this.structuralMesh.geometry.dispose();
+		this.structuralMaterial.dispose();
 		this.material.dispose();
 		this.renderer.dispose();
 	}

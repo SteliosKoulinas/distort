@@ -7,6 +7,7 @@
  */
 
 import type { PaletteMode } from './palette';
+import type { VisualEngineId } from '#lib/visual/types';
 
 export type LfoTarget =
 	| 'curl'
@@ -112,6 +113,17 @@ export interface PhotoSettings {
 	chroma: number;
 }
 
+export interface StructuralSettings {
+	/** Overall amount of structure-aware deformation. */
+	intensity: number;
+	/** How strongly coherent image structures are selected. */
+	sensitivity: number;
+	/** Return toward the source after a transient. */
+	recovery: number;
+	/** Spatial scale of the evolving field. */
+	scale: number;
+}
+
 /**
  * Audio settings. `motion` is the master gate: it decides how far the image
  * opens while a track plays. With no audio the field stays close to the
@@ -130,6 +142,8 @@ export interface AudioSettings {
 }
 
 export interface SimParams {
+	/** Active visual language. The default preserves the particle engine. */
+	visualEngine: VisualEngineId;
 	particleCount: number;
 	pointSize: number;
 	opacity: number;
@@ -176,6 +190,9 @@ export interface SimParams {
 	/** Full-resolution image-space treatment, rendered before the point field. */
 	photo: PhotoSettings;
 
+	/** Parameters for the continuous Structural Erosion experiment. */
+	structural: StructuralSettings;
+
 	/** Four user LFOs. Phases live in ParticleField, not in this snapshot. */
 	lfos: LfoSettings[];
 
@@ -198,6 +215,7 @@ export interface Preset {
 }
 
 const drift: SimParams = {
+	visualEngine: 'particles',
 	particleCount: 200_000,
 	pointSize: 1.2,
 	opacity: 0.68,
@@ -257,6 +275,12 @@ const drift: SimParams = {
 		blocks: 0.28,
 		chroma: 0.3
 	},
+	structural: {
+		intensity: 0.72,
+		sensitivity: 0.82,
+		recovery: 0.58,
+		scale: 0.42
+	},
 
 	lfos: [
 		{ enabled: true, target: 'curl', shape: 'sine', rate: 0.07, depth: 0.35 },
@@ -284,6 +308,7 @@ export function createDefaultParams(): SimParams {
 		palette: { ...drift.palette },
 		form: { ...drift.form },
 		photo: { ...drift.photo },
+		structural: { ...drift.structural },
 		lfos: drift.lfos.map((lfo) => ({ ...lfo })),
 		audio: { ...drift.audio }
 	};
@@ -395,6 +420,7 @@ export function applyPreset(base: SimParams, preset: Preset): SimParams {
 		palette: { ...base.palette },
 		form: { ...(preset.params.form ?? defaults.form) },
 		photo: { ...base.photo },
+		structural: { ...base.structural },
 		lfos: base.lfos.map((lfo) => ({ ...lfo })),
 		audio: { ...base.audio }
 	};

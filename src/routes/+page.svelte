@@ -869,6 +869,69 @@
 				</div>
 			</div>
 
+			<Section title="Visual engine" kicker="00" open={true}>
+				<div class="chips" role="group" aria-label="Visual engine">
+					<button
+						type="button"
+						class:active={params.visualEngine === 'particles'}
+						aria-pressed={params.visualEngine === 'particles'}
+						onclick={() => (params.visualEngine = 'particles')}
+					>
+						Original / particles
+					</button>
+					<button
+						type="button"
+						class:active={params.visualEngine === 'structural-erosion'}
+						aria-pressed={params.visualEngine === 'structural-erosion'}
+						onclick={() => (params.visualEngine = 'structural-erosion')}
+					>
+						Structural erosion
+					</button>
+				</div>
+				{#if params.visualEngine === 'structural-erosion'}
+					<Slider
+						label="Intensity"
+						bind:value={params.structural.intensity}
+						min={0}
+						max={1}
+						step={0.01}
+						format={fmt2}
+						hint="Continuous image deformation driven along the photograph's own coherent structures."
+					/>
+					<Slider
+						label="Sensitivity"
+						bind:value={params.structural.sensitivity}
+						min={0}
+						max={1}
+						step={0.01}
+						format={fmt2}
+						hint="Selects directional, coherent regions rather than applying a uniform noise displacement."
+					/>
+					<Slider
+						label="Recovery"
+						bind:value={params.structural.recovery}
+						min={0}
+						max={1}
+						step={0.01}
+						format={fmt2}
+						hint="How quickly the photograph regains its source structure after sound recedes."
+					/>
+					<Slider
+						label="Field scale"
+						bind:value={params.structural.scale}
+						min={0}
+						max={1}
+						step={0.01}
+						format={fmt2}
+						hint="Scale of the slow evolving field; low values produce broad, restrained movement."
+					/>
+					<p class="grade-hint">
+						This engine renders the photograph continuously and does not require particles.
+						Low and mid frequencies shape the long deformation; spectral change adds local wear.
+					</p>
+				{/if}
+			</Section>
+
 			<Section title="Source" kicker="01" open={true}>
 				<button class="upload" onclick={() => fileEl.click()} type="button">
 					<span>{analysis ? 'Replace image' : 'Choose an image'}</span>
