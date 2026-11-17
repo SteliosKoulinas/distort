@@ -215,6 +215,7 @@ export class ParticleField {
 		this.audio.treble = frame.treble;
 		this.audio.amp = frame.amp;
 		this.audio.beat = Math.max(this.audio.beat, frame.beat);
+		this.audio.features = frame.features;
 	}
 
 	/** A temporary strong spring pulls the cloud home, then releases it. */
