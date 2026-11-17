@@ -7,6 +7,8 @@ import type { NormalField } from './normals';
 import { modulatePhotoValue } from '#lib/core/photo-modulation';
 import { renderFragmentShader, renderVertexShader } from './shaders/render';
 import { photoFragmentShader, photoVertexShader } from './shaders/photo';
+import { signalFragmentShader, signalVertexShader } from './shaders/signal';
+import { fragmentedFragmentShader, fragmentedVertexShader } from './shaders/fragmented';
 
 const MAX_DPR = 1.5;
 
@@ -28,6 +30,10 @@ export class ParticleView {
 	private readonly material: THREE.ShaderMaterial;
 	private readonly photoMaterial: THREE.ShaderMaterial;
 	private readonly photoMesh: THREE.Mesh;
+	private readonly signalMaterial: THREE.ShaderMaterial;
+	private readonly signalMesh: THREE.Mesh;
+	private readonly fragmentedMaterial: THREE.ShaderMaterial;
+	private readonly fragmentedMesh: THREE.Mesh;
 	private photoTexture: THREE.DataTexture | null = null;
 	private points: THREE.Points | null = null;
 	private stageWidth = 1;
@@ -48,6 +54,19 @@ export class ParticleView {
 	private photo: PhotoSettings = {
 		enabled: true, particles: 0.12, amount: 0.32,
 		refraction: 0.65, folds: 0.4, blocks: 0.28, chroma: 0.3
+	};
+	private visualEngine: SimParams['visualEngine'] = 'particles';
+	private signal: SimParams['signal'] = {
+		intensity: 0.72,
+		rows: 0.42,
+		channel: 0.28,
+		recovery: 0.62
+	};
+	private fragmented: SimParams['fragmented'] = {
+		intensity: 0.68,
+		planes: 0.42,
+		depth: 0.38,
+		drift: 0.3
 	};
 	/** Delivery size override. While set, the canvas renders at exactly this. */
 	private exportSize: { width: number; height: number } | null = null;
@@ -114,6 +133,65 @@ export class ParticleView {
 		this.photoMesh.renderOrder = -1;
 		this.photoMesh.frustumCulled = false;
 		this.scene.add(this.photoMesh);
+
+		this.signalMaterial = new THREE.ShaderMaterial({
+			uniforms: {
+				uImage: { value: null },
+				uFit: { value: this.fit },
+				uTime: { value: 0 },
+				uIntensity: { value: 0.72 },
+				uRows: { value: 0.42 },
+				uChannel: { value: 0.28 },
+				uRecovery: { value: 0.62 },
+				uHigh: { value: 0 },
+				uFlux: { value: 0 },
+				uTransient: { value: 0 },
+				uCentroid: { value: 0 },
+				uOpacity: { value: 1 }
+			},
+			vertexShader: signalVertexShader,
+			fragmentShader: signalFragmentShader,
+			transparent: true,
+			depthTest: false,
+			depthWrite: false,
+			toneMapped: false
+		});
+		this.signalMesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.signalMaterial);
+		this.signalMesh.visible = false;
+		this.signalMesh.renderOrder = -2;
+		this.signalMesh.frustumCulled = false;
+		this.scene.add(this.signalMesh);
+
+		this.fragmentedMaterial = new THREE.ShaderMaterial({
+			uniforms: {
+				uImage: { value: null },
+				uFit: { value: this.fit },
+				uTime: { value: 0 },
+				uIntensity: { value: 0.68 },
+				uPlanes: { value: 0.42 },
+				uDepth: { value: 0.38 },
+				uDrift: { value: 0.3 },
+				uLow: { value: 0 },
+				uMid: { value: 0 },
+				uTransient: { value: 0 },
+				uCentroid: { value: 0 },
+				uOpacity: { value: 1 }
+			},
+			vertexShader: fragmentedVertexShader,
+			fragmentShader: fragmentedFragmentShader,
+			transparent: true,
+			depthTest: false,
+			depthWrite: false,
+			toneMapped: false
+		});
+		this.fragmentedMesh = new THREE.Mesh(
+			new THREE.PlaneGeometry(2, 2),
+			this.fragmentedMaterial
+		);
+		this.fragmentedMesh.visible = false;
+		this.fragmentedMesh.renderOrder = -3;
+		this.fragmentedMesh.frustumCulled = false;
+		this.scene.add(this.fragmentedMesh);
 
 		this.material = new THREE.ShaderMaterial({
 			uniforms: {
@@ -210,6 +288,8 @@ export class ParticleView {
 		this.photoTexture?.dispose();
 		this.photoTexture = texture;
 		this.photoMaterial.uniforms.uImage.value = texture;
+		this.signalMaterial.uniforms.uImage.value = texture;
+		this.fragmentedMaterial.uniforms.uImage.value = texture;
 		this.photoMaterial.uniforms.uImageSize.value.set(width, height);
 		this.photoMesh.visible = this.photo.enabled;
 	}
@@ -239,10 +319,13 @@ export class ParticleView {
 	}
 
 	setParams(params: SimParams): void {
+		this.visualEngine = params.visualEngine;
 		this.pointSize = params.pointSize;
 		this.opacity = params.opacity;
 		this.form = { ...params.form };
 		this.photo = { ...params.photo };
+		this.signal = { ...params.signal };
+		this.fragmented = { ...params.fragmented };
 		this.material.uniforms.uPointSize.value = params.pointSize;
 		this.material.uniforms.uOpacity.value = params.opacity;
 	}
@@ -303,11 +386,45 @@ export class ParticleView {
 		audioResponse: number
 	): void {
 		const photo = this.photo;
-		const showPhoto = !!this.photoTexture && photo.enabled;
+		const signal = this.visualEngine === 'signal-dislocation' && !!this.photoTexture;
+		const fragmented = this.visualEngine === 'fragmented-planes' && !!this.photoTexture;
+		const continuous = signal || fragmented;
+		const showPhoto = !!this.photoTexture && photo.enabled && !continuous;
 		const photoParticles = showPhoto
 			? modulatePhotoValue(photo.particles, modulation.photoParticles, audioResponse)
 			: 1;
 		this.photoMesh.visible = showPhoto;
+		this.signalMesh.visible = signal;
+		this.fragmentedMesh.visible = fragmented;
+		this.points && (this.points.visible = positionTexture !== null && !continuous);
+		if (signal) {
+			const u = this.signalMaterial.uniforms;
+			const features = audio.features;
+			u.uTime.value = time;
+			u.uIntensity.value = clamp01(this.signal.intensity);
+			u.uRows.value = clamp01(this.signal.rows);
+			u.uChannel.value = clamp01(this.signal.channel);
+			u.uRecovery.value = clamp01(this.signal.recovery);
+			u.uHigh.value = clamp01(features?.high ?? audio.treble);
+			u.uFlux.value = clamp01(features?.flux ?? audio.beat);
+			u.uTransient.value = clamp01(features?.transient ?? audio.beat);
+			u.uCentroid.value = clamp01(features?.centroid ?? 0.5);
+			u.uOpacity.value = 1;
+		}
+		if (fragmented) {
+			const u = this.fragmentedMaterial.uniforms;
+			const features = audio.features;
+			u.uTime.value = time;
+			u.uIntensity.value = clamp01(this.fragmented.intensity);
+			u.uPlanes.value = clamp01(this.fragmented.planes);
+			u.uDepth.value = clamp01(this.fragmented.depth);
+			u.uDrift.value = clamp01(this.fragmented.drift);
+			u.uLow.value = clamp01(features?.low ?? audio.bass);
+			u.uMid.value = clamp01(features?.mid ?? audio.mid);
+			u.uTransient.value = clamp01(features?.transient ?? audio.beat);
+			u.uCentroid.value = clamp01(features?.centroid ?? 0.5);
+			u.uOpacity.value = 1;
+		}
 		if (showPhoto) {
 			const u = this.photoMaterial.uniforms;
 			u.uTime.value = time;
@@ -356,6 +473,10 @@ export class ParticleView {
 		this.photoTexture?.dispose();
 		this.photoMesh.geometry.dispose();
 		this.photoMaterial.dispose();
+		this.signalMesh.geometry.dispose();
+		this.signalMaterial.dispose();
+		this.fragmentedMesh.geometry.dispose();
+		this.fragmentedMaterial.dispose();
 		this.material.dispose();
 		this.renderer.dispose();
 	}
