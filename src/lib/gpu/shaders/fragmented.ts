@@ -33,7 +33,7 @@ vec3 source(vec2 uv) {
   return texture2D(uImage, uv).rgb;
 }
 
-float luminance(vec3 colour) {
+float sourceLuma(vec3 colour) {
   return dot(colour, vec3(0.2126, 0.7152, 0.0722));
 }
 
@@ -41,7 +41,7 @@ void main() {
   vec2 uv = vUv;
   vec3 base = source(uv);
   float levels = 3.0 + uPlanes * 5.0;
-  float material = luminance(base);
+  float material = sourceLuma(base);
   float activity = clamp(uIntensity * (0.35 + uLow * 0.55 + uMid * 0.25 + uTransient * 0.45), 0.0, 1.0);
   vec2 axis = normalize(vec2(0.35 + uCentroid, 1.0));
   vec3 colour = vec3(0.0);
