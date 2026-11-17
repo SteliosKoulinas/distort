@@ -1,5 +1,6 @@
 import type { AudioFrame } from './types';
 import { silentAudioFrame } from './types';
+import { AudioFeatureExtractor } from './features';
 
 const FFT_SIZE = 2048;
 
@@ -57,6 +58,8 @@ export class AudioEngine {
 	private streamSource: MediaStreamAudioSourceNode | null = null;
 	private stream: MediaStream | null = null;
 	private spectrumData: Uint8Array<ArrayBuffer> | null = null;
+	private featureExtractor: AudioFeatureExtractor | null = null;
+	private featureExtractorSampleRate = 0;
 	private frameSink: ((frame: AudioFrame) => void) | null = null;
 	private objectUrl = '';
 	private raf = 0;
@@ -349,6 +352,11 @@ export class AudioEngine {
 		if (!data || !context) return silentAudioFrame();
 
 		this.analyser?.getByteFrequencyData(data);
+		if (!this.featureExtractor || this.featureExtractorSampleRate !== context.sampleRate) {
+			this.featureExtractor = new AudioFeatureExtractor(context.sampleRate, FFT_SIZE);
+			this.featureExtractorSampleRate = context.sampleRate;
+		}
+		const features = this.featureExtractor.update(data);
 
 		const binHz = context.sampleRate / FFT_SIZE;
 		const binCount = data.length;
@@ -384,7 +392,8 @@ export class AudioEngine {
 			mid: routing.mid ? Math.min(1, mid * amount) : 0,
 			treble: routing.treble ? Math.min(1, treble * amount) : 0,
 			amp: Math.min(1, amp * amount),
-			beat: routing.bass ? beat * Math.min(1, amount) : 0
+			beat: routing.bass ? beat * Math.min(1, amount) : 0,
+			features
 		};
 	}
 
