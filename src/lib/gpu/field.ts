@@ -378,7 +378,7 @@ export class ParticleField {
 		this.updateModulation(dt);
 
 		try {
-			if (this.sim) {
+			if (this.sim && this.params.visualEngine === 'particles') {
 				this.sim.step(
 					dt,
 					this.time,
@@ -390,6 +390,10 @@ export class ParticleField {
 					this.assembly
 				);
 				this.view.render(this.sim.positionTexture, this.time, this.modulation, this.audio, motion, audioResponse);
+				this.frameHook?.(this.canvas);
+			} else if (this.source) {
+				// Continuous image engines do not step or draw particles.
+				this.view.render(null, this.time, this.modulation, this.audio, motion, audioResponse);
 				this.frameHook?.(this.canvas);
 			}
 		} catch (error) {

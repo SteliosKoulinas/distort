@@ -7,6 +7,7 @@ import type { NormalField } from './normals';
 import { modulatePhotoValue } from '#lib/core/photo-modulation';
 import { renderFragmentShader, renderVertexShader } from './shaders/render';
 import { photoFragmentShader, photoVertexShader } from './shaders/photo';
+import { surfaceFragmentShader, surfaceVertexShader } from './shaders/surface';
 
 const MAX_DPR = 1.5;
 
@@ -28,6 +29,8 @@ export class ParticleView {
 	private readonly material: THREE.ShaderMaterial;
 	private readonly photoMaterial: THREE.ShaderMaterial;
 	private readonly photoMesh: THREE.Mesh;
+	private readonly surfaceMaterial: THREE.ShaderMaterial;
+	private readonly surfaceMesh: THREE.Mesh;
 	private photoTexture: THREE.DataTexture | null = null;
 	private points: THREE.Points | null = null;
 	private stageWidth = 1;
@@ -48,6 +51,13 @@ export class ParticleView {
 	private photo: PhotoSettings = {
 		enabled: true, particles: 0.12, amount: 0.32,
 		refraction: 0.65, folds: 0.4, blocks: 0.28, chroma: 0.3
+	};
+	private visualEngine: SimParams['visualEngine'] = 'particles';
+	private surface: SimParams['surface'] = {
+		intensity: 0.72,
+		viscosity: 0.55,
+		scale: 0.4,
+		folding: 0.35
 	};
 	/** Delivery size override. While set, the canvas renders at exactly this. */
 	private exportSize: { width: number; height: number } | null = null;
@@ -114,6 +124,36 @@ export class ParticleView {
 		this.photoMesh.renderOrder = -1;
 		this.photoMesh.frustumCulled = false;
 		this.scene.add(this.photoMesh);
+
+		this.surfaceMaterial = new THREE.ShaderMaterial({
+			uniforms: {
+				uImage: { value: null },
+				uFit: { value: this.fit },
+				uTime: { value: 0 },
+				uIntensity: { value: 0.72 },
+				uViscosity: { value: 0.55 },
+				uScale: { value: 0.4 },
+				uFolding: { value: 0.35 },
+				uLow: { value: 0 },
+				uMid: { value: 0 },
+				uHigh: { value: 0 },
+				uFlux: { value: 0 },
+				uTransient: { value: 0 },
+				uCentroid: { value: 0 },
+				uOpacity: { value: 1 }
+			},
+			vertexShader: surfaceVertexShader,
+			fragmentShader: surfaceFragmentShader,
+			transparent: true,
+			depthTest: false,
+			depthWrite: false,
+			toneMapped: false
+		});
+		this.surfaceMesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.surfaceMaterial);
+		this.surfaceMesh.visible = false;
+		this.surfaceMesh.renderOrder = -3;
+		this.surfaceMesh.frustumCulled = false;
+		this.scene.add(this.surfaceMesh);
 
 		this.material = new THREE.ShaderMaterial({
 			uniforms: {
@@ -210,6 +250,7 @@ export class ParticleView {
 		this.photoTexture?.dispose();
 		this.photoTexture = texture;
 		this.photoMaterial.uniforms.uImage.value = texture;
+		this.surfaceMaterial.uniforms.uImage.value = texture;
 		this.photoMaterial.uniforms.uImageSize.value.set(width, height);
 		this.photoMesh.visible = this.photo.enabled;
 	}
@@ -239,10 +280,12 @@ export class ParticleView {
 	}
 
 	setParams(params: SimParams): void {
+		this.visualEngine = params.visualEngine;
 		this.pointSize = params.pointSize;
 		this.opacity = params.opacity;
 		this.form = { ...params.form };
 		this.photo = { ...params.photo };
+		this.surface = { ...params.surface };
 		this.material.uniforms.uPointSize.value = params.pointSize;
 		this.material.uniforms.uOpacity.value = params.opacity;
 	}
@@ -303,11 +346,29 @@ export class ParticleView {
 		audioResponse: number
 	): void {
 		const photo = this.photo;
-		const showPhoto = !!this.photoTexture && photo.enabled;
+		const surface = this.visualEngine === 'surface-morphology' && !!this.photoTexture;
+		const showPhoto = !!this.photoTexture && photo.enabled && !surface;
 		const photoParticles = showPhoto
 			? modulatePhotoValue(photo.particles, modulation.photoParticles, audioResponse)
 			: 1;
 		this.photoMesh.visible = showPhoto;
+		this.surfaceMesh.visible = surface;
+		if (surface) {
+			const u = this.surfaceMaterial.uniforms;
+			const features = audio.features;
+			u.uTime.value = time;
+			u.uIntensity.value = clamp01(this.surface.intensity) * clamp01(audioResponse);
+			u.uViscosity.value = clamp01(this.surface.viscosity);
+			u.uScale.value = clamp01(this.surface.scale);
+			u.uFolding.value = clamp01(this.surface.folding);
+			u.uLow.value = clamp01(features?.low ?? audio.bass);
+			u.uMid.value = clamp01(features?.mid ?? audio.mid);
+			u.uHigh.value = clamp01(features?.high ?? audio.treble);
+			u.uFlux.value = clamp01(features?.flux ?? audio.beat);
+			u.uTransient.value = clamp01(features?.transient ?? audio.beat);
+			u.uCentroid.value = clamp01(features?.centroid ?? 0.5);
+			u.uOpacity.value = 1;
+		}
 		if (showPhoto) {
 			const u = this.photoMaterial.uniforms;
 			u.uTime.value = time;
@@ -323,7 +384,7 @@ export class ParticleView {
 			u.uOpacity.value = 1 - photoParticles;
 		}
 		if (this.points) {
-			this.points.visible = positionTexture !== null;
+			this.points.visible = positionTexture !== null && !surface;
 			const u = this.material.uniforms;
 			// Point size and opacity only swell when the piece is actually
 			// moving, so a silent image keeps its printed grain.
@@ -356,6 +417,8 @@ export class ParticleView {
 		this.photoTexture?.dispose();
 		this.photoMesh.geometry.dispose();
 		this.photoMaterial.dispose();
+		this.surfaceMesh.geometry.dispose();
+		this.surfaceMaterial.dispose();
 		this.material.dispose();
 		this.renderer.dispose();
 	}

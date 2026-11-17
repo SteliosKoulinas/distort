@@ -869,6 +869,69 @@
 				</div>
 			</div>
 
+			<Section title="Visual engine" kicker="00" open={true}>
+				<div class="chips" role="group" aria-label="Visual engine">
+					<button
+						type="button"
+						class:active={params.visualEngine === 'particles'}
+						aria-pressed={params.visualEngine === 'particles'}
+						onclick={() => (params.visualEngine = 'particles')}
+					>
+						Original / particles
+					</button>
+					<button
+						type="button"
+						class:active={params.visualEngine === 'surface-morphology'}
+						aria-pressed={params.visualEngine === 'surface-morphology'}
+						onclick={() => (params.visualEngine = 'surface-morphology')}
+					>
+						Surface morphology
+					</button>
+				</div>
+				{#if params.visualEngine === 'surface-morphology'}
+					<Slider
+						label="Intensity"
+						bind:value={params.surface.intensity}
+						min={0}
+						max={1}
+						step={0.01}
+						format={fmt2}
+						hint="Continuous nonlinear deformation of the photographic surface; no particles are involved."
+					/>
+					<Slider
+						label="Viscosity"
+						bind:value={params.surface.viscosity}
+						min={0}
+						max={1}
+						step={0.01}
+						format={fmt2}
+						hint="How viscous the material feels when broad and local currents overlap."
+					/>
+					<Slider
+						label="Field scale"
+						bind:value={params.surface.scale}
+						min={0}
+						max={1}
+						step={0.01}
+						format={fmt2}
+						hint="Scale of the nested morphology fields; lower values create broader movement."
+					/>
+					<Slider
+						label="Creases"
+						bind:value={params.surface.folding}
+						min={0}
+						max={1}
+						step={0.01}
+						format={fmt2}
+						hint="Strength of continuous optical creases that form and relax across the image."
+					/>
+					<p class="grade-hint">
+						This engine renders the photograph continuously and does not require particles.
+						Low frequencies drive the broad current; spectral change increases elasticity.
+					</p>
+				{/if}
+			</Section>
+
 			<Section title="Source" kicker="01" open={true}>
 				<button class="upload" onclick={() => fileEl.click()} type="button">
 					<span>{analysis ? 'Replace image' : 'Choose an image'}</span>
