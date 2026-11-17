@@ -159,6 +159,7 @@ export class ParticleField {
 		// not on every resample.
 		this.view.setNormals(buildNormalField(analysis));
 		this.view.setPhoto(image);
+		this.view.resetTemporal();
 		this.build();
 		this.start();
 	}
@@ -378,7 +379,7 @@ export class ParticleField {
 		this.updateModulation(dt);
 
 		try {
-			if (this.sim) {
+			if (this.sim && this.params.visualEngine === 'particles') {
 				this.sim.step(
 					dt,
 					this.time,
@@ -390,6 +391,12 @@ export class ParticleField {
 					this.assembly
 				);
 				this.view.render(this.sim.positionTexture, this.time, this.modulation, this.audio, motion, audioResponse);
+				this.frameHook?.(this.canvas);
+			} else if (this.source) {
+				// Temporal Residue is a continuous image compositor. The
+				// simulation stays allocated for A/B switching but is not
+				// stepped or drawn in this mode.
+				this.view.render(null, this.time, this.modulation, this.audio, motion, audioResponse);
 				this.frameHook?.(this.canvas);
 			}
 		} catch (error) {

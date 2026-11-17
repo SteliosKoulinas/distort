@@ -869,6 +869,60 @@
 				</div>
 			</div>
 
+			<Section title="Visual engine" kicker="00" open={true}>
+				<div class="chips" role="group" aria-label="Visual engine">
+					<button
+						type="button"
+						class:active={params.visualEngine === 'particles'}
+						aria-pressed={params.visualEngine === 'particles'}
+						onclick={() => (params.visualEngine = 'particles')}
+					>
+						Original / particles
+					</button>
+					<button
+						type="button"
+						class:active={params.visualEngine === 'temporal-residue'}
+						aria-pressed={params.visualEngine === 'temporal-residue'}
+						onclick={() => (params.visualEngine = 'temporal-residue')}
+					>
+						Temporal residue
+					</button>
+				</div>
+				{#if params.visualEngine === 'temporal-residue'}
+					<Slider
+						label="Memory"
+						bind:value={params.temporal.memory}
+						min={0}
+						max={1}
+						step={0.01}
+						format={fmt2}
+						hint="How strongly previous photographic states remain visible while sound is active."
+					/>
+					<Slider
+						label="Decay"
+						bind:value={params.temporal.decay}
+						min={0}
+						max={1}
+						step={0.01}
+						format={fmt2}
+						hint="How quickly the residual state returns toward the current image."
+					/>
+					<Slider
+						label="Residue drift"
+						bind:value={params.temporal.drift}
+						min={0}
+						max={1}
+						step={0.01}
+						format={fmt2}
+						hint="Small spatial movement of the retained state; history is bounded to two render targets."
+					/>
+					<p class="grade-hint">
+						This engine renders the photograph continuously and does not require particles.
+						Spectral flux and transients open memory; source replacement and resizing reset it.
+					</p>
+				{/if}
+			</Section>
+
 			<Section title="Source" kicker="01" open={true}>
 				<button class="upload" onclick={() => fileEl.click()} type="button">
 					<span>{analysis ? 'Replace image' : 'Choose an image'}</span>

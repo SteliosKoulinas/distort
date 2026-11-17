@@ -130,6 +130,8 @@ export interface AudioSettings {
 }
 
 export interface SimParams {
+	/** Active visual language. The default preserves the particle engine. */
+	visualEngine: 'particles' | 'temporal-residue';
 	particleCount: number;
 	pointSize: number;
 	opacity: number;
@@ -176,6 +178,12 @@ export interface SimParams {
 	/** Full-resolution image-space treatment, rendered before the point field. */
 	photo: PhotoSettings;
 
+	temporal: {
+		memory: number;
+		decay: number;
+		drift: number;
+	};
+
 	/** Four user LFOs. Phases live in ParticleField, not in this snapshot. */
 	lfos: LfoSettings[];
 
@@ -198,6 +206,7 @@ export interface Preset {
 }
 
 const drift: SimParams = {
+	visualEngine: 'particles',
 	particleCount: 200_000,
 	pointSize: 1.2,
 	opacity: 0.68,
@@ -257,6 +266,11 @@ const drift: SimParams = {
 		blocks: 0.28,
 		chroma: 0.3
 	},
+	temporal: {
+		memory: 0.7,
+		decay: 0.4,
+		drift: 0.7
+	},
 
 	lfos: [
 		{ enabled: true, target: 'curl', shape: 'sine', rate: 0.07, depth: 0.35 },
@@ -284,6 +298,7 @@ export function createDefaultParams(): SimParams {
 		palette: { ...drift.palette },
 		form: { ...drift.form },
 		photo: { ...drift.photo },
+		temporal: { ...drift.temporal },
 		lfos: drift.lfos.map((lfo) => ({ ...lfo })),
 		audio: { ...drift.audio }
 	};
@@ -395,6 +410,7 @@ export function applyPreset(base: SimParams, preset: Preset): SimParams {
 		palette: { ...base.palette },
 		form: { ...(preset.params.form ?? defaults.form) },
 		photo: { ...base.photo },
+		temporal: { ...base.temporal },
 		lfos: base.lfos.map((lfo) => ({ ...lfo })),
 		audio: { ...base.audio }
 	};

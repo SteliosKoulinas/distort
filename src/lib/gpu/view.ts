@@ -7,6 +7,11 @@ import type { NormalField } from './normals';
 import { modulatePhotoValue } from '#lib/core/photo-modulation';
 import { renderFragmentShader, renderVertexShader } from './shaders/render';
 import { photoFragmentShader, photoVertexShader } from './shaders/photo';
+import {
+	temporalCopyFragmentShader,
+	temporalFragmentShader,
+	temporalVertexShader
+} from './shaders/temporal';
 
 const MAX_DPR = 1.5;
 
@@ -28,6 +33,20 @@ export class ParticleView {
 	private readonly material: THREE.ShaderMaterial;
 	private readonly photoMaterial: THREE.ShaderMaterial;
 	private readonly photoMesh: THREE.Mesh;
+	private readonly temporalMaterial: THREE.ShaderMaterial;
+	private readonly temporalCopyMaterial: THREE.ShaderMaterial;
+	private readonly temporalMesh: THREE.Mesh;
+	private readonly temporalCopyMesh: THREE.Mesh;
+	private readonly temporalScene = new THREE.Scene();
+	private readonly temporalCopyScene = new THREE.Scene();
+	private readonly temporalCamera: THREE.OrthographicCamera;
+	private readonly temporalCopyCamera: THREE.OrthographicCamera;
+	private temporalSource: THREE.WebGLRenderTarget;
+	private temporalHistoryA: THREE.WebGLRenderTarget;
+	private temporalHistoryB: THREE.WebGLRenderTarget;
+	private temporalRead: THREE.WebGLRenderTarget;
+	private temporalWrite: THREE.WebGLRenderTarget;
+	private temporalReset = true;
 	private photoTexture: THREE.DataTexture | null = null;
 	private points: THREE.Points | null = null;
 	private stageWidth = 1;
@@ -48,6 +67,12 @@ export class ParticleView {
 	private photo: PhotoSettings = {
 		enabled: true, particles: 0.12, amount: 0.32,
 		refraction: 0.65, folds: 0.4, blocks: 0.28, chroma: 0.3
+	};
+	private visualEngine: SimParams['visualEngine'] = 'particles';
+	private temporal: SimParams['temporal'] = {
+		memory: 0.7,
+		decay: 0.4,
+		drift: 0.7
 	};
 	/** Delivery size override. While set, the canvas renders at exactly this. */
 	private exportSize: { width: number; height: number } | null = null;
@@ -114,6 +139,54 @@ export class ParticleView {
 		this.photoMesh.renderOrder = -1;
 		this.photoMesh.frustumCulled = false;
 		this.scene.add(this.photoMesh);
+
+		this.temporalCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
+		this.temporalCamera.position.z = 1;
+		this.temporalCopyCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
+		this.temporalCopyCamera.position.z = 1;
+
+		this.temporalMaterial = new THREE.ShaderMaterial({
+			uniforms: {
+				uCurrent: { value: null },
+				uHistory: { value: null },
+				uTime: { value: 0 },
+				uMemory: { value: 0 },
+				uDecay: { value: 0.4 },
+				uDrift: { value: 0.7 },
+				uLow: { value: 0 },
+				uFlux: { value: 0 },
+				uTransient: { value: 0 }
+			},
+			vertexShader: temporalVertexShader,
+			fragmentShader: temporalFragmentShader,
+			depthTest: false,
+			depthWrite: false,
+			toneMapped: false
+		});
+		this.temporalMesh = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.temporalMaterial);
+		this.temporalMesh.frustumCulled = false;
+		this.temporalScene.add(this.temporalMesh);
+
+		this.temporalCopyMaterial = new THREE.ShaderMaterial({
+			uniforms: { uTexture: { value: null } },
+			vertexShader: temporalVertexShader,
+			fragmentShader: temporalCopyFragmentShader,
+			depthTest: false,
+			depthWrite: false,
+			toneMapped: false
+		});
+		this.temporalCopyMesh = new THREE.Mesh(
+			new THREE.PlaneGeometry(2, 2),
+			this.temporalCopyMaterial
+		);
+		this.temporalCopyMesh.frustumCulled = false;
+		this.temporalCopyScene.add(this.temporalCopyMesh);
+
+		this.temporalSource = this.createTemporalTarget(1, 1);
+		this.temporalHistoryA = this.createTemporalTarget(1, 1);
+		this.temporalHistoryB = this.createTemporalTarget(1, 1);
+		this.temporalRead = this.temporalHistoryA;
+		this.temporalWrite = this.temporalHistoryB;
 
 		this.material = new THREE.ShaderMaterial({
 			uniforms: {
@@ -239,12 +312,18 @@ export class ParticleView {
 	}
 
 	setParams(params: SimParams): void {
+		this.visualEngine = params.visualEngine;
 		this.pointSize = params.pointSize;
 		this.opacity = params.opacity;
 		this.form = { ...params.form };
 		this.photo = { ...params.photo };
+		this.temporal = { ...params.temporal };
 		this.material.uniforms.uPointSize.value = params.pointSize;
 		this.material.uniforms.uOpacity.value = params.opacity;
+	}
+
+	resetTemporal(): void {
+		this.temporalReset = true;
 	}
 
 	/** Linear-light dark/light stops plus their auto-levels. */
@@ -303,11 +382,13 @@ export class ParticleView {
 		audioResponse: number
 	): void {
 		const photo = this.photo;
+		const temporal = this.visualEngine === 'temporal-residue' && !!this.photoTexture;
 		const showPhoto = !!this.photoTexture && photo.enabled;
 		const photoParticles = showPhoto
 			? modulatePhotoValue(photo.particles, modulation.photoParticles, audioResponse)
 			: 1;
 		this.photoMesh.visible = showPhoto;
+		this.points && (this.points.visible = positionTexture !== null && !temporal);
 		if (showPhoto) {
 			const u = this.photoMaterial.uniforms;
 			u.uTime.value = time;
@@ -322,8 +403,7 @@ export class ParticleView {
 			u.uBeat.value = clamp01(audio.beat);
 			u.uOpacity.value = 1 - photoParticles;
 		}
-		if (this.points) {
-			this.points.visible = positionTexture !== null;
+		if (this.points && !temporal) {
 			const u = this.material.uniforms;
 			// Point size and opacity only swell when the piece is actually
 			// moving, so a silent image keeps its printed grain.
@@ -347,15 +427,26 @@ export class ParticleView {
 			u.uSlice.value = form.slice * gate * (0.18 + beat * 0.7 + amp * 0.35);
 			u.uRelief.value = form.relief * gate * (0.3 + amp * 0.8);
 		}
-		this.renderer.render(this.scene, this.camera);
+		if (temporal) {
+			this.renderTemporal(time, audio, audioResponse);
+		} else {
+			this.renderer.render(this.scene, this.camera);
+		}
 	}
 
 	dispose(): void {
 		this.disposePoints();
 		this.normalTexture.dispose();
 		this.photoTexture?.dispose();
+		this.temporalSource.dispose();
+		this.temporalHistoryA.dispose();
+		this.temporalHistoryB.dispose();
 		this.photoMesh.geometry.dispose();
 		this.photoMaterial.dispose();
+		this.temporalMesh.geometry.dispose();
+		this.temporalMaterial.dispose();
+		this.temporalCopyMesh.geometry.dispose();
+		this.temporalCopyMaterial.dispose();
 		this.material.dispose();
 		this.renderer.dispose();
 	}
@@ -377,6 +468,78 @@ export class ParticleView {
 			this.material.uniforms.uPixelRatio.value = this.dpr;
 		}
 		this.updateFit();
+		this.ensureTemporalTargets();
+	}
+
+	private createTemporalTarget(width: number, height: number): THREE.WebGLRenderTarget {
+		const target = new THREE.WebGLRenderTarget(width, height, {
+			minFilter: THREE.LinearFilter,
+			magFilter: THREE.LinearFilter,
+			format: THREE.RGBAFormat,
+			depthBuffer: false,
+			stencilBuffer: false
+		});
+		target.texture.colorSpace = THREE.SRGBColorSpace;
+		return target;
+	}
+
+	private ensureTemporalTargets(): void {
+		const width = Math.max(1, this.renderWidth);
+		const height = Math.max(1, this.renderHeight);
+		if (this.temporalSource.width === width && this.temporalSource.height === height) return;
+
+		this.temporalSource.dispose();
+		this.temporalHistoryA.dispose();
+		this.temporalHistoryB.dispose();
+		this.temporalSource = this.createTemporalTarget(width, height);
+		this.temporalHistoryA = this.createTemporalTarget(width, height);
+		this.temporalHistoryB = this.createTemporalTarget(width, height);
+		this.temporalRead = this.temporalHistoryA;
+		this.temporalWrite = this.temporalHistoryB;
+		this.temporalReset = true;
+	}
+
+	private renderTemporal(time: number, audio: AudioFrame, audioResponse: number): void {
+		this.ensureTemporalTargets();
+		if (this.temporalReset) {
+			const clear = (target: THREE.WebGLRenderTarget) => {
+				this.renderer.setRenderTarget(target);
+				this.renderer.clear(true, true, true);
+			};
+			clear(this.temporalSource);
+			clear(this.temporalHistoryA);
+			clear(this.temporalHistoryB);
+			this.renderer.setRenderTarget(null);
+			this.temporalReset = false;
+		}
+
+		this.renderer.setRenderTarget(this.temporalSource);
+		this.renderer.clear(true, true, true);
+		this.renderer.render(this.scene, this.camera);
+
+		const features = audio.features;
+		const u = this.temporalMaterial.uniforms;
+		u.uCurrent.value = this.temporalSource.texture;
+		u.uHistory.value = this.temporalRead.texture;
+		u.uTime.value = time;
+		u.uMemory.value = clamp01(this.temporal.memory) * clamp01(audioResponse);
+		u.uDecay.value = clamp01(this.temporal.decay);
+		u.uDrift.value = clamp01(this.temporal.drift);
+		u.uLow.value = clamp01(features?.low ?? audio.bass);
+		u.uFlux.value = clamp01(features?.flux ?? audio.beat);
+		u.uTransient.value = clamp01(features?.transient ?? audio.beat);
+
+		this.renderer.setRenderTarget(this.temporalWrite);
+		this.renderer.clear(true, true, true);
+		this.renderer.render(this.temporalScene, this.temporalCamera);
+
+		this.temporalCopyMaterial.uniforms.uTexture.value = this.temporalWrite.texture;
+		this.renderer.setRenderTarget(null);
+		this.renderer.render(this.temporalCopyScene, this.temporalCopyCamera);
+
+		const previous = this.temporalRead;
+		this.temporalRead = this.temporalWrite;
+		this.temporalWrite = previous;
 	}
 
 	private updateFit(): void {
