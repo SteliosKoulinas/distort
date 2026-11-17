@@ -120,6 +120,20 @@ export interface StructuralSettings {
 	scale: number;
 }
 
+export interface SignalSettings {
+	intensity: number;
+	rows: number;
+	channel: number;
+	recovery: number;
+}
+
+export interface FragmentedSettings {
+	intensity: number;
+	planes: number;
+	depth: number;
+	drift: number;
+}
+
 /**
  * Audio settings. `motion` is the master gate: it decides how far the image
  * opens while a track plays. With no audio the field stays close to the
@@ -205,6 +219,8 @@ export interface SimParams {
 		scale: number;
 		folding: number;
 	};
+	signal: SignalSettings;
+	fragmented: FragmentedSettings;
 
 	/** Four user LFOs. Phases live in ParticleField, not in this snapshot. */
 	lfos: LfoSettings[];
@@ -305,6 +321,18 @@ const drift: SimParams = {
 		scale: 0.4,
 		folding: 0.35
 	},
+	signal: {
+		intensity: 0.72,
+		rows: 0.42,
+		channel: 0.28,
+		recovery: 0.62
+	},
+	fragmented: {
+		intensity: 0.68,
+		planes: 0.42,
+		depth: 0.38,
+		drift: 0.3
+	},
 
 	lfos: [
 		{ enabled: true, target: 'curl', shape: 'sine', rate: 0.07, depth: 0.35 },
@@ -335,6 +363,8 @@ export function createDefaultParams(): SimParams {
 		temporal: { ...drift.temporal },
 		structural: { ...drift.structural },
 		surface: { ...drift.surface },
+		signal: { ...drift.signal },
+		fragmented: { ...drift.fragmented },
 		lfos: drift.lfos.map((lfo) => ({ ...lfo })),
 		audio: { ...drift.audio }
 	};
@@ -449,6 +479,8 @@ export function applyPreset(base: SimParams, preset: Preset): SimParams {
 		temporal: { ...base.temporal },
 		structural: { ...base.structural },
 		surface: { ...base.surface },
+		signal: { ...base.signal },
+		fragmented: { ...base.fragmented },
 		lfos: base.lfos.map((lfo) => ({ ...lfo })),
 		audio: { ...base.audio }
 	};

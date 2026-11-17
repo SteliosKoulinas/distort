@@ -903,6 +903,22 @@
 					>
 						Temporal residue
 					</button>
+					<button
+						type="button"
+						class:active={params.visualEngine === 'signal-dislocation'}
+						aria-pressed={params.visualEngine === 'signal-dislocation'}
+						onclick={() => (params.visualEngine = 'signal-dislocation')}
+					>
+						Signal dislocation
+					</button>
+					<button
+						type="button"
+						class:active={params.visualEngine === 'fragmented-planes'}
+						aria-pressed={params.visualEngine === 'fragmented-planes'}
+						onclick={() => (params.visualEngine = 'fragmented-planes')}
+					>
+						Fragmented planes
+					</button>
 				</div>
 				{#if params.visualEngine === 'structural-erosion'}
 					<Slider
@@ -985,6 +1001,84 @@
 					<p class="grade-hint">
 						Continuous image rendering. Particles are not required.
 					</p>
+				{/if}
+				{#if params.visualEngine === 'signal-dislocation'}
+					<Slider
+						label="Intensity"
+						bind:value={params.signal.intensity}
+						min={0}
+						max={1}
+						step={0.01}
+						format={fmt2}
+						hint="Amount of selective signal instability opened by spectral change."
+					/>
+					<Slider
+						label="Rows"
+						bind:value={params.signal.rows}
+						min={0}
+						max={1}
+						step={0.01}
+						format={fmt2}
+						hint="Density of the image rows available for dislocation."
+					/>
+					<Slider
+						label="Channels"
+						bind:value={params.signal.channel}
+						min={0}
+						max={1}
+						step={0.01}
+						format={fmt2}
+						hint="Restrained RGB separation during a signal event."
+					/>
+					<Slider
+						label="Recovery"
+						bind:value={params.signal.recovery}
+						min={0}
+						max={1}
+						step={0.01}
+						format={fmt2}
+						hint="How quickly the image resolves after a transient."
+					/>
+					<p class="grade-hint">Continuous scanline rendering. No particle decomposition.</p>
+				{/if}
+				{#if params.visualEngine === 'fragmented-planes'}
+					<Slider
+						label="Intensity"
+						bind:value={params.fragmented.intensity}
+						min={0}
+						max={1}
+						step={0.01}
+						format={fmt2}
+						hint="Amount of source-derived plane separation."
+					/>
+					<Slider
+						label="Planes"
+						bind:value={params.fragmented.planes}
+						min={0}
+						max={1}
+						step={0.01}
+						format={fmt2}
+						hint="Number and softness of luminance-derived image regions."
+					/>
+					<Slider
+						label="Depth"
+						bind:value={params.fragmented.depth}
+						min={0}
+						max={1}
+						step={0.01}
+						format={fmt2}
+						hint="Parallax distance between the continuous source planes."
+					/>
+					<Slider
+						label="Drift"
+						bind:value={params.fragmented.drift}
+						min={0}
+						max={1}
+						step={0.01}
+						format={fmt2}
+						hint="Slow movement of the separated planes."
+					/>
+					<p class="grade-hint">Continuous 2.5D image rendering. No particles required.</p>
 				{/if}
 				{#if params.visualEngine === 'temporal-residue'}
 					<Slider

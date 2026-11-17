@@ -12,6 +12,8 @@ the individual experiment branches.
 - Structural erosion
 - Surface morphology
 - Temporal residue
+- Signal dislocation
+- Fragmented planes
 
 The selector changes the active renderer without requiring a branch switch.
 The continuous modes hide and bypass the particle render path; the original
@@ -24,6 +26,8 @@ Each experiment exposes only its small set of meaningful controls:
 - Structural Erosion: intensity, sensitivity, recovery, field scale.
 - Surface Morphology: intensity, viscosity, field scale, creases.
 - Temporal Residue: memory, decay, residue drift.
+- Signal Dislocation: intensity, row density, channel separation, recovery.
+- Fragmented Planes: intensity, plane count, depth, drift.
 
 ## Review protocol
 
