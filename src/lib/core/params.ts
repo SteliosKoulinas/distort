@@ -7,6 +7,7 @@
  */
 
 import type { PaletteMode } from './palette';
+import type { VisualEngineId } from '#lib/visual/types';
 
 export type LfoTarget =
 	| 'curl'
@@ -112,6 +113,13 @@ export interface PhotoSettings {
 	chroma: number;
 }
 
+export interface StructuralSettings {
+	intensity: number;
+	sensitivity: number;
+	recovery: number;
+	scale: number;
+}
+
 /**
  * Audio settings. `motion` is the master gate: it decides how far the image
  * opens while a track plays. With no audio the field stays close to the
@@ -131,7 +139,7 @@ export interface AudioSettings {
 
 export interface SimParams {
 	/** Active visual language. The default preserves the particle engine. */
-	visualEngine: 'particles' | 'temporal-residue';
+	visualEngine: VisualEngineId;
 	particleCount: number;
 	pointSize: number;
 	opacity: number;
@@ -182,6 +190,20 @@ export interface SimParams {
 		memory: number;
 		decay: number;
 		drift: number;
+	};
+
+	structural: {
+		intensity: number;
+		sensitivity: number;
+		recovery: number;
+		scale: number;
+	};
+
+	surface: {
+		intensity: number;
+		viscosity: number;
+		scale: number;
+		folding: number;
 	};
 
 	/** Four user LFOs. Phases live in ParticleField, not in this snapshot. */
@@ -271,6 +293,18 @@ const drift: SimParams = {
 		decay: 0.4,
 		drift: 0.7
 	},
+	structural: {
+		intensity: 0.72,
+		sensitivity: 0.82,
+		recovery: 0.58,
+		scale: 0.42
+	},
+	surface: {
+		intensity: 0.72,
+		viscosity: 0.55,
+		scale: 0.4,
+		folding: 0.35
+	},
 
 	lfos: [
 		{ enabled: true, target: 'curl', shape: 'sine', rate: 0.07, depth: 0.35 },
@@ -299,6 +333,8 @@ export function createDefaultParams(): SimParams {
 		form: { ...drift.form },
 		photo: { ...drift.photo },
 		temporal: { ...drift.temporal },
+		structural: { ...drift.structural },
+		surface: { ...drift.surface },
 		lfos: drift.lfos.map((lfo) => ({ ...lfo })),
 		audio: { ...drift.audio }
 	};
@@ -411,6 +447,8 @@ export function applyPreset(base: SimParams, preset: Preset): SimParams {
 		form: { ...(preset.params.form ?? defaults.form) },
 		photo: { ...base.photo },
 		temporal: { ...base.temporal },
+		structural: { ...base.structural },
+		surface: { ...base.surface },
 		lfos: base.lfos.map((lfo) => ({ ...lfo })),
 		audio: { ...base.audio }
 	};

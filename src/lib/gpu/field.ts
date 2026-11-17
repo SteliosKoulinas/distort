@@ -9,6 +9,7 @@ import { sampleParticles, type SampledParticles } from '#lib/image/sample';
 import { resolvePalette, paletteLevels } from '#lib/core/palette';
 import { hexToLinearRgb } from '#lib/core/color';
 import { buildNormalField } from './normals';
+import { buildStructureField } from '#lib/image/structure';
 import { GpuSimulation, type PointerState } from './simulation';
 import { ParticleView } from './view';
 
@@ -158,6 +159,7 @@ export class ParticleField {
 		// The surface is a property of the photograph: build it once, here,
 		// not on every resample.
 		this.view.setNormals(buildNormalField(analysis));
+		this.view.setStructure(buildStructureField(analysis));
 		this.view.setPhoto(image);
 		this.view.resetTemporal();
 		this.build();

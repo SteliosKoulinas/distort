@@ -881,6 +881,22 @@
 					</button>
 					<button
 						type="button"
+						class:active={params.visualEngine === 'structural-erosion'}
+						aria-pressed={params.visualEngine === 'structural-erosion'}
+						onclick={() => (params.visualEngine = 'structural-erosion')}
+					>
+						Structural erosion
+					</button>
+					<button
+						type="button"
+						class:active={params.visualEngine === 'surface-morphology'}
+						aria-pressed={params.visualEngine === 'surface-morphology'}
+						onclick={() => (params.visualEngine = 'surface-morphology')}
+					>
+						Surface morphology
+					</button>
+					<button
+						type="button"
 						class:active={params.visualEngine === 'temporal-residue'}
 						aria-pressed={params.visualEngine === 'temporal-residue'}
 						onclick={() => (params.visualEngine = 'temporal-residue')}
@@ -888,6 +904,88 @@
 						Temporal residue
 					</button>
 				</div>
+				{#if params.visualEngine === 'structural-erosion'}
+					<Slider
+						label="Intensity"
+						bind:value={params.structural.intensity}
+						min={0}
+						max={1}
+						step={0.01}
+						format={fmt2}
+						hint="Continuous deformation driven along the photograph's own coherent structures."
+					/>
+					<Slider
+						label="Sensitivity"
+						bind:value={params.structural.sensitivity}
+						min={0}
+						max={1}
+						step={0.01}
+						format={fmt2}
+						hint="Selects directional, coherent regions instead of applying uniform noise."
+					/>
+					<Slider
+						label="Recovery"
+						bind:value={params.structural.recovery}
+						min={0}
+						max={1}
+						step={0.01}
+						format={fmt2}
+						hint="How quickly the photograph returns toward its source structure."
+					/>
+					<Slider
+						label="Field scale"
+						bind:value={params.structural.scale}
+						min={0}
+						max={1}
+						step={0.01}
+						format={fmt2}
+						hint="Scale of the slowly evolving structural field."
+					/>
+					<p class="grade-hint">
+						Continuous image rendering. Particles are not required.
+					</p>
+				{/if}
+				{#if params.visualEngine === 'surface-morphology'}
+					<Slider
+						label="Intensity"
+						bind:value={params.surface.intensity}
+						min={0}
+						max={1}
+						step={0.01}
+						format={fmt2}
+						hint="Continuous nonlinear deformation of the photographic surface."
+					/>
+					<Slider
+						label="Viscosity"
+						bind:value={params.surface.viscosity}
+						min={0}
+						max={1}
+						step={0.01}
+						format={fmt2}
+						hint="How viscous the overlapping broad and local currents feel."
+					/>
+					<Slider
+						label="Field scale"
+						bind:value={params.surface.scale}
+						min={0}
+						max={1}
+						step={0.01}
+						format={fmt2}
+						hint="Scale of the nested morphology fields."
+					/>
+					<Slider
+						label="Creases"
+						bind:value={params.surface.folding}
+						min={0}
+						max={1}
+						step={0.01}
+						format={fmt2}
+						hint="Strength of continuous optical creases."
+					/>
+					<p class="grade-hint">
+						Continuous image rendering. Particles are not required.
+					</p>
+				{/if}
 				{#if params.visualEngine === 'temporal-residue'}
 					<Slider
 						label="Memory"
