@@ -7,6 +7,7 @@
  */
 
 import type { PaletteMode } from './palette';
+import type { VisualEngineId } from '#lib/visual/types';
 
 export type LfoTarget =
 	| 'curl'
@@ -112,6 +113,13 @@ export interface PhotoSettings {
 	chroma: number;
 }
 
+export interface FragmentedSettings {
+	intensity: number;
+	planes: number;
+	depth: number;
+	drift: number;
+}
+
 /**
  * Audio settings. `motion` is the master gate: it decides how far the image
  * opens while a track plays. With no audio the field stays close to the
@@ -130,6 +138,7 @@ export interface AudioSettings {
 }
 
 export interface SimParams {
+	visualEngine: VisualEngineId;
 	particleCount: number;
 	pointSize: number;
 	opacity: number;
@@ -175,6 +184,7 @@ export interface SimParams {
 
 	/** Full-resolution image-space treatment, rendered before the point field. */
 	photo: PhotoSettings;
+	fragmented: FragmentedSettings;
 
 	/** Four user LFOs. Phases live in ParticleField, not in this snapshot. */
 	lfos: LfoSettings[];
@@ -198,6 +208,7 @@ export interface Preset {
 }
 
 const drift: SimParams = {
+	visualEngine: 'particles',
 	particleCount: 200_000,
 	pointSize: 1.2,
 	opacity: 0.68,
@@ -257,6 +268,12 @@ const drift: SimParams = {
 		blocks: 0.28,
 		chroma: 0.3
 	},
+	fragmented: {
+		intensity: 0.68,
+		planes: 0.42,
+		depth: 0.38,
+		drift: 0.3
+	},
 
 	lfos: [
 		{ enabled: true, target: 'curl', shape: 'sine', rate: 0.07, depth: 0.35 },
@@ -284,6 +301,7 @@ export function createDefaultParams(): SimParams {
 		palette: { ...drift.palette },
 		form: { ...drift.form },
 		photo: { ...drift.photo },
+		fragmented: { ...drift.fragmented },
 		lfos: drift.lfos.map((lfo) => ({ ...lfo })),
 		audio: { ...drift.audio }
 	};
@@ -395,6 +413,7 @@ export function applyPreset(base: SimParams, preset: Preset): SimParams {
 		palette: { ...base.palette },
 		form: { ...(preset.params.form ?? defaults.form) },
 		photo: { ...base.photo },
+		fragmented: { ...base.fragmented },
 		lfos: base.lfos.map((lfo) => ({ ...lfo })),
 		audio: { ...base.audio }
 	};

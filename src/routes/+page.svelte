@@ -869,6 +869,66 @@
 				</div>
 			</div>
 
+			<Section title="Visual engine" kicker="00" open={true}>
+				<div class="chips" role="group" aria-label="Visual engine">
+					<button
+						type="button"
+						class:active={params.visualEngine === 'particles'}
+						aria-pressed={params.visualEngine === 'particles'}
+						onclick={() => (params.visualEngine = 'particles')}
+					>
+						Original / particles
+					</button>
+					<button
+						type="button"
+						class:active={params.visualEngine === 'fragmented-planes'}
+						aria-pressed={params.visualEngine === 'fragmented-planes'}
+						onclick={() => (params.visualEngine = 'fragmented-planes')}
+					>
+						Fragmented planes
+					</button>
+				</div>
+				{#if params.visualEngine === 'fragmented-planes'}
+					<Slider
+						label="Intensity"
+						bind:value={params.fragmented.intensity}
+						min={0}
+						max={1}
+						step={0.01}
+						format={fmt2}
+						hint="Amount of source-derived plane separation."
+					/>
+					<Slider
+						label="Planes"
+						bind:value={params.fragmented.planes}
+						min={0}
+						max={1}
+						step={0.01}
+						format={fmt2}
+						hint="Number and softness of luminance-derived image regions."
+					/>
+					<Slider
+						label="Depth"
+						bind:value={params.fragmented.depth}
+						min={0}
+						max={1}
+						step={0.01}
+						format={fmt2}
+						hint="Parallax distance between the continuous source planes."
+					/>
+					<Slider
+						label="Drift"
+						bind:value={params.fragmented.drift}
+						min={0}
+						max={1}
+						step={0.01}
+						format={fmt2}
+						hint="Slow movement of the separated planes."
+					/>
+					<p class="grade-hint">Continuous 2.5D image rendering. Particles are not required.</p>
+				{/if}
+			</Section>
+
 			<Section title="Source" kicker="01" open={true}>
 				<button class="upload" onclick={() => fileEl.click()} type="button">
 					<span>{analysis ? 'Replace image' : 'Choose an image'}</span>
