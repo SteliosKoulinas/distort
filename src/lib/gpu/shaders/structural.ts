@@ -49,9 +49,9 @@ vec3 sampleImage(vec2 uv) {
 void main() {
   vec2 uv = vUv;
   vec4 structure = texture2D(uStructure, uv);
-  // R/G store the principal direction, B coherence, A gradient magnitude.
-  vec2 direction = normalize(structure.rg * 2.0 - 1.0);
-  vec2 across = vec2(-direction.y, direction.x);
+  // R/G store the gradient axis in texture coordinates, B coherence, A magnitude.
+  vec2 gradientDir = normalize(structure.rg * 2.0 - 1.0);
+  vec2 contourDir = vec2(-gradientDir.y, gradientDir.x);
   float coherence = structure.b;
   float gradient = structure.a;
 
@@ -65,7 +65,7 @@ void main() {
   // A second cross-flow is strongest where the structure is less coherent.
   float longitudinal = slow * 0.018 * (0.35 + uLow * 0.85);
   float lateral = grain * 0.012 * (1.0 - coherence) * (0.25 + uMid);
-  vec2 displacement = direction * longitudinal + across * lateral;
+  vec2 displacement = contourDir * longitudinal + gradientDir * lateral;
   displacement *= material * activity;
 
   // Erosion is a selective loss of continuity, not a uniform opacity pulse.
@@ -75,7 +75,7 @@ void main() {
   float selective = wear * gradient * coherence * activity;
   float recovery = clamp(uRecovery + (1.0 - activity) * 0.55, 0.0, 1.0);
   vec3 displaced = sampleImage(uv + displacement);
-  vec3 stretched = sampleImage(uv + displacement * 1.8 + direction * selective * 0.035);
+  vec3 stretched = sampleImage(uv + displacement * 1.8 + contourDir * selective * 0.035);
   vec3 colour = mix(displaced, stretched, selective * (1.0 - recovery * 0.65));
 
   // Preserve smooth photographic regions and let edges carry the event.

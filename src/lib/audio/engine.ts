@@ -1,16 +1,9 @@
 import type { AudioFrame } from './types';
 import { silentAudioFrame } from './types';
-import { AudioFeatureExtractor } from './features';
+import { RoutedAudioAnalyzer, type AudioRouting } from './routing';
 
 const FFT_SIZE = 2048;
 
-const BASS_LOW = 20;
-const BASS_HIGH = 160;
-const MID_LOW = 160;
-const MID_HIGH = 2_000;
-const TREBLE_LOW = 2_000;
-const TREBLE_HIGH = 12_000;
-const AMP_HIGH = 16_000;
 
 export interface AudioTrack {
 	name: string;
@@ -21,13 +14,7 @@ export interface AudioTrack {
  * Which spectral bands reach the field. Values are plain numbers, so the
  * animation loop never learns that audio exists as anything but forces.
  */
-export interface AudioRouting {
-	/** Master depth, 0..2. */
-	amount: number;
-	bass: boolean;
-	mid: boolean;
-	treble: boolean;
-}
+export type { AudioRouting } from './routing';
 
 /**
  * Two kinds of source feed the same analyser:
@@ -58,12 +45,12 @@ export class AudioEngine {
 	private streamSource: MediaStreamAudioSourceNode | null = null;
 	private stream: MediaStream | null = null;
 	private spectrumData: Uint8Array<ArrayBuffer> | null = null;
-	private featureExtractor: AudioFeatureExtractor | null = null;
+	private featureExtractor: RoutedAudioAnalyzer | null = null;
 	private featureExtractorSampleRate = 0;
+	private lastAnalysisTime = 0;
 	private frameSink: ((frame: AudioFrame) => void) | null = null;
 	private objectUrl = '';
 	private raf = 0;
-	private beatAverage = 0;
 	private playing = false;
 	private live = false;
 	private liveLabel = '';
@@ -152,7 +139,7 @@ export class AudioEngine {
 			this.element.load();
 		});
 
-		this.beatAverage = 0;
+		this.featureExtractor?.reset();
 		return { name: file.name, duration: this.duration };
 	}
 
@@ -191,6 +178,7 @@ export class AudioEngine {
 	seek(seconds: number): void {
 		if (this.live || this.duration <= 0) return;
 		this.element.currentTime = Math.max(0, Math.min(this.duration, seconds));
+		this.featureExtractor?.reset();
 		this.onTime?.(this.currentTime, this.duration);
 	}
 
@@ -227,7 +215,7 @@ export class AudioEngine {
 		this.streamSource.connect(this.analyser);
 		if (this.outputGain) this.outputGain.gain.value = 0;
 
-		this.beatAverage = 0;
+		this.featureExtractor?.reset();
 		this.live = true;
 		this.playing = true;
 
@@ -337,6 +325,8 @@ export class AudioEngine {
 	private stopMetering(): void {
 		if (this.raf) cancelAnimationFrame(this.raf);
 		this.raf = 0;
+		this.featureExtractor?.reset();
+		this.lastAnalysisTime = 0;
 		this.frameSink?.(silentAudioFrame());
 	}
 
@@ -353,48 +343,13 @@ export class AudioEngine {
 
 		this.analyser?.getByteFrequencyData(data);
 		if (!this.featureExtractor || this.featureExtractorSampleRate !== context.sampleRate) {
-			this.featureExtractor = new AudioFeatureExtractor(context.sampleRate, FFT_SIZE);
+			this.featureExtractor = new RoutedAudioAnalyzer(context.sampleRate, FFT_SIZE);
 			this.featureExtractorSampleRate = context.sampleRate;
 		}
-		const features = this.featureExtractor.update(data);
-
-		const binHz = context.sampleRate / FFT_SIZE;
-		const binCount = data.length;
-
-		const band = (low: number, high: number): number => {
-			const from = Math.max(0, Math.floor(low / binHz));
-			const to = Math.min(binCount - 1, Math.ceil(high / binHz));
-			if (to < from) return 0;
-			let sum = 0;
-			for (let i = from; i <= to; i++) {
-				const value = data[i] / 255;
-				sum += value * value;
-			}
-			return Math.sqrt(sum / (to - from + 1));
-		};
-
-		const bass = band(BASS_LOW, BASS_HIGH);
-		const mid = band(MID_LOW, MID_HIGH);
-		const treble = band(TREBLE_LOW, TREBLE_HIGH);
-		const amp = band(BASS_LOW, AMP_HIGH);
-
-		// A slow running average turns the bass band into a transient
-		// detector. The field owns the decay, so a peak is enough here.
-		this.beatAverage += (bass - this.beatAverage) * 0.06;
-		const delta = bass - this.beatAverage;
-		const beat = delta > 0.1 && bass > 0.16 ? Math.min(1, delta * 3.4) : 0;
-
-		const routing = this.routing;
-		const amount = Math.max(0, Math.min(2, routing.amount));
-
-		return {
-			bass: routing.bass ? Math.min(1, bass * amount) : 0,
-			mid: routing.mid ? Math.min(1, mid * amount) : 0,
-			treble: routing.treble ? Math.min(1, treble * amount) : 0,
-			amp: Math.min(1, amp * amount),
-			beat: routing.bass ? beat * Math.min(1, amount) : 0,
-			features
-		};
+		const now = performance.now();
+		const dt = this.lastAnalysisTime ? Math.min(0.1, (now - this.lastAnalysisTime) / 1000) : 1 / 60;
+		this.lastAnalysisTime = now;
+		return this.featureExtractor.update(data, this.routing, dt);
 	}
 
 	private handleTimeUpdate = (): void => {

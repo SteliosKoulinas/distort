@@ -38,9 +38,8 @@ void main() {
   // residue when a transient ends. Flux adds a short-lived visual trace.
   float memory = clamp(uMemory * (0.45 + uFlux * 0.35 + uTransient * 0.5), 0.0, 0.92);
   float persistence = clamp(memory * (1.0 - uDecay * 0.62), 0.0, 0.9);
-  float veil = mix(0.0, 0.18, persistence);
-  vec3 colour = current.rgb * (1.0 - veil) + history.rgb * persistence;
-  colour /= max(1.0, 1.0 + persistence * 0.35);
+  // Convex feedback cannot accumulate brightness or clip a static source.
+  vec3 colour = mix(current.rgb, history.rgb, persistence);
   gl_FragColor = vec4(colour, 1.0);
 }
 `;

@@ -2,7 +2,7 @@
 
 Branch: `experiment/visual-language-review`
 
-This branch combines the three independent prototypes into one reviewable
+This branch combines the five independent prototypes into one reviewable
 application. It is intended for A/B comparison and is not a replacement for
 the individual experiment branches.
 
@@ -16,8 +16,11 @@ the individual experiment branches.
 - Fragmented planes
 
 The selector changes the active renderer without requiring a branch switch.
-The continuous modes hide and bypass the particle render path; the original
-mode keeps the existing particle renderer.
+Each mode now implements the engine lifecycle and owns its GPU resources.
+Continuous modes allocate no particle simulation. The host disposes the previous
+engine on a switch and initializes the new one; retained UI values are restored.
+See [the current foundation status](../visual-language-foundation.md) for the
+correctness fixes, tests and remaining roadmap.
 
 ## Controls
 
@@ -28,6 +31,15 @@ Each experiment exposes only its small set of meaningful controls:
 - Temporal Residue: memory, decay, residue drift.
 - Signal Dislocation: intensity, row density, channel separation, recovery.
 - Fragmented Planes: intensity, plane count, depth, drift.
+
+Source, Audio and Export/Stage are shared. Original-only optics, grading, presets,
+physics and modulation panels are hidden in continuous modes. Reset engine clears
+the active mode. All modes receive routed, Motion/Reactive-gated audio.
+
+These are still prototype artistic controls: Structural recovery and Fragmented
+luminance regions are not the final irreversible-damage and colour-segmentation
+specifications. Temporal currently converges to the source in silence; its final
+memory-freeze behaviour comes in the artistic phase.
 
 ## Review protocol
 

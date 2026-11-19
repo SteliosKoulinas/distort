@@ -72,12 +72,19 @@ export class AudioFeatureExtractor {
 	update(bytes: Uint8Array, dt = 1 / 60): AudioFeatures {
 		const bins = bytes.length;
 		if (!bins) return silentAudioFeatures();
+		const frameDelta = Number.isFinite(dt) ? Math.max(0, Math.min(0.25, dt)) : 1 / 60;
+		if (this.previous && this.previous.length !== bins) {
+			// Analyser FFT size can change when an input device is replaced.
+			// Comparing arrays of different lengths would read undefined and
+			// poison flux/transient with NaN.
+			this.reset();
+		}
 
 		const binHz = this.sampleRate / this.fftSize;
 		const nyquist = this.sampleRate / 2;
 		const band = (low: number, high: number): number => {
-			const from = Math.max(0, Math.floor(low / binHz));
-			const to = Math.min(bins - 1, Math.ceil(high / binHz));
+			const from = Math.max(0, Math.ceil(low / binHz));
+			const to = Math.min(bins - 1, Math.ceil(high / binHz) - 1);
 			if (to < from) return 0;
 			let sum = 0;
 			for (let i = from; i <= to; i++) {
@@ -108,9 +115,9 @@ export class AudioFeatureExtractor {
 		const high = band(2_000, 12_000);
 		const delta = Math.max(0, rms - this.slowEnvelope);
 
-		this.slowEnvelope = smooth(this.slowEnvelope, rms, dt, 3.2, 0.7);
-		this.transient = smooth(this.transient, delta + flux * 0.35, dt, 12, 3.5);
-		this.previous = new Float32Array(bytes);
+		this.slowEnvelope = smooth(this.slowEnvelope, rms, frameDelta, 3.2, 0.7);
+		this.transient = smooth(this.transient, delta + flux * 0.35, frameDelta, 12, 3.5);
+		this.previous = Float32Array.from(bytes, (value) => value / 255);
 
 		return {
 			rms,

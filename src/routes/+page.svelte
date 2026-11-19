@@ -40,6 +40,7 @@
 	import LfoScope from '#lib/ui/LfoScope.svelte';
 	import AudioScope from '#lib/ui/AudioScope.svelte';
 	import { AudioEngine } from '#lib/audio/engine';
+	import { ENGINES, engineDefinition } from '#lib/visual/registry';
 
 	let canvasEl: HTMLCanvasElement;
 	let stageEl: HTMLElement;
@@ -54,6 +55,18 @@
 	const audioSource: { engine: AudioEngine | null } = { engine: null };
 
 	let params = $state<SimParams>(createDefaultParams());
+	let activeEngine = $derived(engineDefinition(params.visualEngine));
+	let enginePanels = $derived(activeEngine.controls.panels);
+
+	function engineValue(key: string): number {
+		const group = activeEngine.group;
+		return group ? (params[group] as Record<string, number>)[key] : 0;
+	}
+
+	function setEngineValue(key: string, value: number): void {
+		const group = activeEngine.group;
+		if (group) (params[group] as Record<string, number>)[key] = value;
+	}
 	let analysis = $state<ImageAnalysis | null>(null);
 	let stats = $state<FieldStats | null>(null);
 	let fileName = $state('');
@@ -176,14 +189,14 @@
 	function applyAudioRouting() {
 		if (!audioEngine) return;
 		const audio = params.audio;
-		audioEngine.routing.amount = audio.reactive ? audio.amount : 0;
+		audioEngine.routing.amount = audio.amount;
 		audioEngine.routing.bass = audio.bass;
 		audioEngine.routing.mid = audio.mid;
 		audioEngine.routing.treble = audio.treble;
 	}
 
 	let hudCount = $derived(
-		stats
+		!enginePanels.includes('particles') ? activeEngine.label : stats
 			? `${fmtCount(stats.count)} dots`
 			: analysis
 				? `${fmtCount(params.particleCount)} dots`
@@ -314,8 +327,12 @@
 	// Delivery preview uses the same framebuffer as recording, including grain.
 	$effect(() => {
 		const format = activeFormat;
-		if (format) field?.setExportSize(format.width, format.height);
-		else field?.clearExportSize();
+		try {
+			if (format) field?.setExportSize(format.width, format.height);
+			else field?.clearExportSize();
+		} catch (error) {
+			exportError = error instanceof Error ? error.message : 'Could not resize the delivery frame.';
+		}
 	});
 
 	// The UI writes a plain snapshot on a control change. The animation loop
@@ -330,7 +347,7 @@
 	$effect(() => {
 		const audio = params.audio;
 		const routing = {
-			amount: audio.reactive ? audio.amount : 0,
+			amount: audio.amount,
 			bass: audio.bass,
 			mid: audio.mid,
 			treble: audio.treble
@@ -372,7 +389,7 @@
 			analysis = nextAnalysis;
 
 			field.setParams($state.snapshot(params));
-			field.setSource(nextAnalysis, nextImage);
+			await field.setSource(nextAnalysis, nextImage);
 		} catch (error) {
 			errorMessage = error instanceof Error ? error.message : 'Could not read that image.';
 		} finally {
@@ -592,7 +609,26 @@
 		await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 		if (!mounted || generation !== recordGeneration) return;
 
-		instance.setExportSize(format.width, format.height);
+		const readyDeadline = performance.now() + 10_000;
+		while (!instance.isReady && performance.now() < readyDeadline) {
+			await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+			if (!mounted || generation !== recordGeneration) return;
+		}
+		if (!instance.isReady) {
+			recordStarting = false;
+			recordFormat = null;
+			exportError = 'The visual engine is still preparing the image. Try recording again in a moment.';
+			return;
+		}
+
+		try {
+			instance.setExportSize(format.width, format.height);
+		} catch (error) {
+			recordStarting = false;
+			recordFormat = null;
+			exportError = error instanceof Error ? error.message : 'The delivery frame could not be created.';
+			return;
+		}
 
 		let created: FrameRecorder;
 		try {
@@ -830,7 +866,7 @@
 		</div>
 		<div class="mast-stats">
 			<span>{stats ? `${stats.fps.toFixed(0)} fps` : '— fps'}</span>
-			<span>{stats ? `${fmtCount(stats.count)} dots` : '— dots'}</span>
+			<span>{enginePanels.includes('particles') ? (stats ? `${fmtCount(stats.count)} dots` : '— dots') : activeEngine.label}</span>
 			<span>{clock} local</span>
 			<div class="look" role="group" aria-label="Look">
 				<button
@@ -857,262 +893,34 @@
 		<aside class="panel" aria-label="Controls">
 			<div class="panel-head">
 				<div class="panel-eyebrow"><span>( 01 — Instrument )</span><span>WebGL / 2D</span></div>
-				<h1 class="panel-title">An image,<br />in dust.</h1>
-				<p class="panel-lede">
-					The full photograph stays visible beneath <strong>{fmtCount(params.particleCount)}</strong>
-					points. Sound refracts the image; move the pointer to pull its grain apart.
-				</p>
+				<h1 class="panel-title">An image,<br />in motion.</h1>
+				<p class="panel-lede">{activeEngine.description}</p>
+				{#if enginePanels.includes('particles')}
 				<div class="panel-spec">
 					<span><b>{stats ? fmtCount(stats.count) : fmtCount(params.particleCount)}</b> points</span>
 					<span><b>{stats?.textureSize ?? '—'}</b>² grid</span>
 					<span><b>{stats?.precision ?? 'GPU'}</b> buffer</span>
 				</div>
+				{/if}
 			</div>
 
 			<Section title="Visual engine" kicker="00" open={true}>
 				<div class="chips" role="group" aria-label="Visual engine">
-					<button
-						type="button"
-						class:active={params.visualEngine === 'particles'}
-						aria-pressed={params.visualEngine === 'particles'}
-						onclick={() => (params.visualEngine = 'particles')}
-					>
-						Original / particles
-					</button>
-					<button
-						type="button"
-						class:active={params.visualEngine === 'structural-erosion'}
-						aria-pressed={params.visualEngine === 'structural-erosion'}
-						onclick={() => (params.visualEngine = 'structural-erosion')}
-					>
-						Structural erosion
-					</button>
-					<button
-						type="button"
-						class:active={params.visualEngine === 'surface-morphology'}
-						aria-pressed={params.visualEngine === 'surface-morphology'}
-						onclick={() => (params.visualEngine = 'surface-morphology')}
-					>
-						Surface morphology
-					</button>
-					<button
-						type="button"
-						class:active={params.visualEngine === 'temporal-residue'}
-						aria-pressed={params.visualEngine === 'temporal-residue'}
-						onclick={() => (params.visualEngine = 'temporal-residue')}
-					>
-						Temporal residue
-					</button>
-					<button
-						type="button"
-						class:active={params.visualEngine === 'signal-dislocation'}
-						aria-pressed={params.visualEngine === 'signal-dislocation'}
-						onclick={() => (params.visualEngine = 'signal-dislocation')}
-					>
-						Signal dislocation
-					</button>
-					<button
-						type="button"
-						class:active={params.visualEngine === 'fragmented-planes'}
-						aria-pressed={params.visualEngine === 'fragmented-planes'}
-						onclick={() => (params.visualEngine = 'fragmented-planes')}
-					>
-						Fragmented planes
-					</button>
+					{#each ENGINES as engine (engine.id)}
+						<button type="button" class:active={params.visualEngine === engine.id}
+							aria-pressed={params.visualEngine === engine.id}
+							disabled={exportBusy}
+							onclick={() => (params.visualEngine = engine.id)}>
+							{engine.label}
+						</button>
+					{/each}
 				</div>
-				{#if params.visualEngine === 'structural-erosion'}
-					<Slider
-						label="Intensity"
-						bind:value={params.structural.intensity}
-						min={0}
-						max={1}
-						step={0.01}
-						format={fmt2}
-						hint="Continuous deformation driven along the photograph's own coherent structures."
-					/>
-					<Slider
-						label="Sensitivity"
-						bind:value={params.structural.sensitivity}
-						min={0}
-						max={1}
-						step={0.01}
-						format={fmt2}
-						hint="Selects directional, coherent regions instead of applying uniform noise."
-					/>
-					<Slider
-						label="Recovery"
-						bind:value={params.structural.recovery}
-						min={0}
-						max={1}
-						step={0.01}
-						format={fmt2}
-						hint="How quickly the photograph returns toward its source structure."
-					/>
-					<Slider
-						label="Field scale"
-						bind:value={params.structural.scale}
-						min={0}
-						max={1}
-						step={0.01}
-						format={fmt2}
-						hint="Scale of the slowly evolving structural field."
-					/>
-					<p class="grade-hint">
-						Continuous image rendering. Particles are not required.
-					</p>
-				{/if}
-				{#if params.visualEngine === 'surface-morphology'}
-					<Slider
-						label="Intensity"
-						bind:value={params.surface.intensity}
-						min={0}
-						max={1}
-						step={0.01}
-						format={fmt2}
-						hint="Continuous nonlinear deformation of the photographic surface."
-					/>
-					<Slider
-						label="Viscosity"
-						bind:value={params.surface.viscosity}
-						min={0}
-						max={1}
-						step={0.01}
-						format={fmt2}
-						hint="How viscous the overlapping broad and local currents feel."
-					/>
-					<Slider
-						label="Field scale"
-						bind:value={params.surface.scale}
-						min={0}
-						max={1}
-						step={0.01}
-						format={fmt2}
-						hint="Scale of the nested morphology fields."
-					/>
-					<Slider
-						label="Creases"
-						bind:value={params.surface.folding}
-						min={0}
-						max={1}
-						step={0.01}
-						format={fmt2}
-						hint="Strength of continuous optical creases."
-					/>
-					<p class="grade-hint">
-						Continuous image rendering. Particles are not required.
-					</p>
-				{/if}
-				{#if params.visualEngine === 'signal-dislocation'}
-					<Slider
-						label="Intensity"
-						bind:value={params.signal.intensity}
-						min={0}
-						max={1}
-						step={0.01}
-						format={fmt2}
-						hint="Amount of selective signal instability opened by spectral change."
-					/>
-					<Slider
-						label="Rows"
-						bind:value={params.signal.rows}
-						min={0}
-						max={1}
-						step={0.01}
-						format={fmt2}
-						hint="Density of the image rows available for dislocation."
-					/>
-					<Slider
-						label="Channels"
-						bind:value={params.signal.channel}
-						min={0}
-						max={1}
-						step={0.01}
-						format={fmt2}
-						hint="Restrained RGB separation during a signal event."
-					/>
-					<Slider
-						label="Recovery"
-						bind:value={params.signal.recovery}
-						min={0}
-						max={1}
-						step={0.01}
-						format={fmt2}
-						hint="How quickly the image resolves after a transient."
-					/>
-					<p class="grade-hint">Continuous scanline rendering. No particle decomposition.</p>
-				{/if}
-				{#if params.visualEngine === 'fragmented-planes'}
-					<Slider
-						label="Intensity"
-						bind:value={params.fragmented.intensity}
-						min={0}
-						max={1}
-						step={0.01}
-						format={fmt2}
-						hint="Amount of source-derived plane separation."
-					/>
-					<Slider
-						label="Planes"
-						bind:value={params.fragmented.planes}
-						min={0}
-						max={1}
-						step={0.01}
-						format={fmt2}
-						hint="Number and softness of luminance-derived image regions."
-					/>
-					<Slider
-						label="Depth"
-						bind:value={params.fragmented.depth}
-						min={0}
-						max={1}
-						step={0.01}
-						format={fmt2}
-						hint="Parallax distance between the continuous source planes."
-					/>
-					<Slider
-						label="Drift"
-						bind:value={params.fragmented.drift}
-						min={0}
-						max={1}
-						step={0.01}
-						format={fmt2}
-						hint="Slow movement of the separated planes."
-					/>
-					<p class="grade-hint">Continuous 2.5D image rendering. No particles required.</p>
-				{/if}
-				{#if params.visualEngine === 'temporal-residue'}
-					<Slider
-						label="Memory"
-						bind:value={params.temporal.memory}
-						min={0}
-						max={1}
-						step={0.01}
-						format={fmt2}
-						hint="How strongly previous photographic states remain visible while sound is active."
-					/>
-					<Slider
-						label="Decay"
-						bind:value={params.temporal.decay}
-						min={0}
-						max={1}
-						step={0.01}
-						format={fmt2}
-						hint="How quickly the residual state returns toward the current image."
-					/>
-					<Slider
-						label="Residue drift"
-						bind:value={params.temporal.drift}
-						min={0}
-						max={1}
-						step={0.01}
-						format={fmt2}
-						hint="Small spatial movement of the retained state; history is bounded to two render targets."
-					/>
-					<p class="grade-hint">
-						This engine renders the photograph continuously and does not require particles.
-						Spectral flux and transients open memory; source replacement and resizing reset it.
-					</p>
-				{/if}
+				{#each activeEngine.controls.sliders as control (`${activeEngine.id}/${control.key}`)}
+					<Slider label={control.label}
+						bind:value={() => engineValue(control.key), (value) => setEngineValue(control.key, value)}
+						min={control.min} max={control.max} step={control.step} hint={control.hint} format={fmt2} />
+				{/each}
+				<button class="ghost" type="button" onclick={() => field?.reset()} disabled={!analysis}>Reset engine</button>
 			</Section>
 
 			<Section title="Source" kicker="01" open={true}>
@@ -1146,6 +954,7 @@
 						<div class="palette-caption">Dominant hue clusters</div>
 					{/if}
 
+					{#if enginePanels.includes('source-grade')}
 					<Slider
 						label="Edge detail"
 						bind:value={params.edgeBoost}
@@ -1207,14 +1016,15 @@
 							</p>
 						{/if}
 					</div>
+					{/if}
 				{:else}
 					<p class="empty-copy">
-						Drop a photograph into the stage. Its pixels stay whole while a second, fine-grained
-						particle field is sampled from it.
+						Drop a photograph into the stage to begin.
 					</p>
 				{/if}
 			</Section>
 
+			{#if enginePanels.includes('optics')}
 			<Section title="Image / optics" kicker="02" open={true}>
 				<Toggle
 					label="Continuous image"
@@ -1313,6 +1123,8 @@
 				{/if}
 			</Section>
 
+			{/if}
+
 			<Section title="Audio" kicker="04" open={true}>
 				<button class="upload" onclick={() => audioEl.click()} type="button">
 					<span>{audioLoaded ? 'Replace audio' : 'Choose audio'}</span>
@@ -1403,7 +1215,7 @@
 				<Toggle
 					label="Audio reactive"
 					bind:checked={params.audio.reactive}
-					hint="When off, the image stays still."
+					hint="When off, sound stops driving the engine. Existing motion follows its own dynamics."
 				/>
 				<Slider
 					label="Motion"
@@ -1645,6 +1457,7 @@
 				</p>
 			</Section>
 
+			{#if enginePanels.includes('particles')}
 			<Section title="Presets" kicker="06" open={true}>
 				<div class="presets">
 					{#each PRESETS as preset, index}
@@ -2019,6 +1832,7 @@
 					{stats?.precision ?? 'GPU'}
 				</p>
 			</footer>
+			{/if}
 		</aside>
 
 		<div class="stage-slot">
@@ -2247,9 +2061,6 @@
 		text-align: justify;
 		text-align-last: left;
 		color: var(--ink-soft);
-	}
-	.panel-lede strong {
-		font-weight: 500;
 	}
 	.panel-spec {
 		display: grid;

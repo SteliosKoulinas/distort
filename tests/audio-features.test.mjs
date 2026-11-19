@@ -40,8 +40,25 @@ test('spectral flux responds to new energy and decays on a stable frame', () => 
 	assert.equal(extractor.update(quiet).flux, 0);
 	assert.ok(extractor.update(loud).flux > 0);
 	const stable = extractor.update(loud);
-	assert.ok(stable.flux < extractor.update(quiet).flux || stable.flux >= 0);
+	assert.equal(stable.flux, 0);
+	assert.equal(extractor.update(quiet).flux, 0);
 	assert.ok(stable.transient >= 0 && stable.transient <= 1);
+});
+
+test('spectral flux detects an increase between two nonzero frames', () => {
+	const extractor = new AudioFeatureExtractor(48_000, 2048);
+	extractor.update(spectrum(1024, 64));
+	assert.ok(extractor.update(spectrum(1024, 128)).flux > 0.5);
+	assert.equal(extractor.update(spectrum(1024, 128)).flux, 0);
+});
+
+test('changing analyser bin count resets history instead of producing NaN descriptors', () => {
+	const extractor = new AudioFeatureExtractor(48_000, 2048);
+	extractor.update(spectrum(1024, 80));
+	const changed = extractor.update(spectrum(512, 160));
+	for (const value of Object.values(changed)) assert.ok(Number.isFinite(value));
+	assert.equal(changed.flux, 0);
+	assert.equal(extractor.update(spectrum(512, 160)).flux, 0);
 });
 
 test('reset removes history so the next frame is not treated as a transition', () => {

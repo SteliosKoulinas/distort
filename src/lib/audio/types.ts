@@ -1,4 +1,5 @@
 import type { AudioFeatures } from './features';
+import { silentAudioFeatures } from './features.ts';
 
 export interface AudioFrame {
 	bass: number;
@@ -7,8 +8,8 @@ export interface AudioFrame {
 	amp: number;
 	/** 0..1 transient envelope. Integrated with the Kick button by the field. */
 	beat: number;
-	/** Optional richer feature set for experimental visual engines. */
-	features?: AudioFeatures;
+	/** Routed descriptors. Engines never receive raw analyser data. */
+	features: AudioFeatures;
 }
 
 export function silentAudioFrame(): AudioFrame {
@@ -17,6 +18,7 @@ export function silentAudioFrame(): AudioFrame {
 		mid: 0,
 		treble: 0,
 		amp: 0,
-		beat: 0
+		beat: 0,
+		features: silentAudioFeatures()
 	};
 }

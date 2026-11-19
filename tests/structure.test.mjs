@@ -35,3 +35,20 @@ test('a constant image has no directional coherence', () => {
 	assert.equal(Math.max(...field.coherence), 0);
 	assert.equal(Math.max(...field.gradient), 0);
 });
+
+for (const axis of ['x', 'y', 'diagonal']) {
+	test(`${axis} ramp has perpendicular gradient and contour directions`, () => {
+		const analysis = analyzeImage(image(16, 16, (x, y) =>
+			axis === 'x' ? x * 12 : axis === 'y' ? y * 12 : (x + y) * 6));
+		const field = buildStructureField(analysis);
+		const i = 8 * 16 + 8;
+		const gx = field.gradientDir.x[i], gy = field.gradientDir.y[i];
+		const cx = field.contourDir.x[i], cy = field.contourDir.y[i];
+		assert.ok(field.coherence[i] > 0.99);
+		assert.ok(Math.abs(gx * cx + gy * cy) < 1e-6);
+		assert.ok(Math.abs(analysis.sobelX[i] * cy - analysis.sobelY[i] * cx) > 0.1);
+		if (axis === 'x') assert.ok(Math.abs(cx) < 1e-6);
+		if (axis === 'y') assert.ok(Math.abs(cy) < 1e-6);
+		if (axis === 'diagonal') assert.ok(Math.abs(gx - gy) < 1e-6);
+	});
+}
