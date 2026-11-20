@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import type { SampledParticles } from '#lib/image/sample';
 import type { AudioFrame } from '#lib/audio/types';
-import type { SimParams, Modulation } from '#lib/core/params';
+import type { Modulation } from '#lib/core/params';
+import type { ParticleParams } from '#lib/visual/params';
 import {
 	initializationFragmentShader,
 	positionFragmentShader,
@@ -205,7 +206,7 @@ export class GpuSimulation {
 	step(
 		dt: number,
 		time: number,
-		params: SimParams,
+		params: ParticleParams,
 		modulation: Modulation,
 		pointer: PointerState,
 		audio: AudioFrame,

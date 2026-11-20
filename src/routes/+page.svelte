@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount, tick } from 'svelte';
 	import { ParticleField, type FieldStats } from '#lib/gpu/field';
-	import { decodeImageFile } from '#lib/image/decode';
+	import { decodeImageFile, decodeImageFileOriginal, type DecodedImage } from '#lib/image/decode';
 	import { analyzeImage, type ImageAnalysis } from '#lib/image/analyze';
 	import {
 		applyPreset,
@@ -23,10 +23,12 @@
 		normalizeEdge,
 		stageFormat,
 		type ExportFormat,
-		type FrameChoice
+		type FrameChoice,
+		type StillFormat
 	} from '#lib/export/formats';
 	import { takeSeconds } from '#lib/export/duration';
 	import { FrameRecorder } from '#lib/export/recorder';
+	import { encodeStill, type StillMime } from '#lib/export/still';
 	import {
 		PALETTE_MODES,
 		paletteCss,
@@ -40,9 +42,12 @@
 	import LfoScope from '#lib/ui/LfoScope.svelte';
 	import AudioScope from '#lib/ui/AudioScope.svelte';
 	import { AudioEngine } from '#lib/audio/engine';
+	import { ENGINES, engineDefinition } from '#lib/visual/registry';
 
 	let canvasEl: HTMLCanvasElement;
 	let stageEl: HTMLElement;
+	let stageWidth = $state(1);
+	let stageHeight = $state(1);
 	let fileEl: HTMLInputElement;
 	let audioEl: HTMLInputElement;
 	let field: ParticleField | null = null;
@@ -54,6 +59,18 @@
 	const audioSource: { engine: AudioEngine | null } = { engine: null };
 
 	let params = $state<SimParams>(createDefaultParams());
+	let activeEngine = $derived(engineDefinition(params.visualEngine));
+	let enginePanels = $derived(activeEngine.controls.panels);
+
+	function engineValue(key: string): number {
+		const group = activeEngine.group;
+		return group ? (params[group] as Record<string, number>)[key] : 0;
+	}
+
+	function setEngineValue(key: string, value: number): void {
+		const group = activeEngine.group;
+		if (group) (params[group] as Record<string, number>)[key] = value;
+	}
 	let analysis = $state<ImageAnalysis | null>(null);
 	let stats = $state<FieldStats | null>(null);
 	let fileName = $state('');
@@ -61,6 +78,8 @@
 	let loading = $state(false);
 	let errorMessage = $state('');
 	let dragActive = $state(false);
+	let sourceFile = $state<File | null>(null);
+	let originalImage = $state<DecodedImage | null>(null);
 	let activePreset = $state<PresetId | 'custom'>('drift');
 	let clock = $state('--:--');
 	let look = $state<'light' | 'dark'>('light');
@@ -76,7 +95,9 @@
 
 	// Delivery. `stage` follows the panel's own aspect; every other choice
 	// frames the stage and becomes the export size.
-	let frame = $state<FrameChoice>('reel');
+	// The live stage is the source of truth until the user explicitly chooses
+	// a delivery frame. This also keeps the initial image in its natural stage.
+	let frame = $state<FrameChoice>('stage');
 	let customWidth = $state(1080);
 	let customHeight = $state(1440);
 	// Fixed 60s by default. "Track" deliberately uses the file's own length.
@@ -112,6 +133,23 @@
 	/** True when the track was already playing before the take began. */
 	let recordKeepsAudio = false;
 	let recordFormat: ExportFormat | null = null;
+	let imageZoom = $state(1);
+	let imagePanX = $state(0);
+	let imagePanY = $state(0);
+	let stillMimeChoice = $state<StillMime>('image/png');
+	let stillReady = $state(false);
+	let stillError = $state('');
+	let stillResult = $state<{
+		url: string;
+		name: string;
+		size: number;
+		width: number;
+		height: number;
+		frameId: string;
+	} | null>(null);
+	let stillUrl = '';
+	let stillCaptureBusy = $state(false);
+	let stillFrameCounter = 0;
 
 	let activeFormat = $derived<ExportFormat | null>(
 		frame === 'stage'
@@ -123,6 +161,28 @@
 	let recordProgress = $derived(recordTotal > 0 ? Math.min(1, recordElapsed / recordTotal) : 0);
 	let deliverSeconds = $derived(
 		takeSeconds(exportSeconds, customSeconds, audioDuration, audioLoaded && !audioLive)
+	);
+	let stillFormat = $derived.by<StillFormat | null>(() => {
+		const selected = frame === 'stage'
+			? stageFormat(stageWidth, stageHeight)
+			: frame === 'custom'
+				? customFormat(customWidth, customHeight)
+				: activeFormat;
+		if (!selected) return null;
+		return {
+			id: 'custom',
+			label: selected.label,
+			note: selected.note,
+			width: selected.width,
+			height: selected.height,
+			aspect: selected.aspect
+		};
+	});
+	let stillDetailWarning = $derived(
+		stillFormat && originalImage &&
+		Math.max(originalImage.width, originalImage.height) < Math.max(stillFormat.width, stillFormat.height)
+			? 'The original is smaller than this target; the saved frame will be upscaled.'
+			: ''
 	);
 
 	function setLook(next: 'light' | 'dark') {
@@ -176,14 +236,14 @@
 	function applyAudioRouting() {
 		if (!audioEngine) return;
 		const audio = params.audio;
-		audioEngine.routing.amount = audio.reactive ? audio.amount : 0;
+		audioEngine.routing.amount = audio.amount;
 		audioEngine.routing.bass = audio.bass;
 		audioEngine.routing.mid = audio.mid;
 		audioEngine.routing.treble = audio.treble;
 	}
 
 	let hudCount = $derived(
-		stats
+		!enginePanels.includes('particles') ? activeEngine.label : stats
 			? `${fmtCount(stats.count)} dots`
 			: analysis
 				? `${fmtCount(params.particleCount)} dots`
@@ -228,6 +288,15 @@
 
 		field = instance;
 		scopeSource.field = instance;
+		const stageSizeObserver = new ResizeObserver(() => {
+			const rect = stageEl.getBoundingClientRect();
+			stageWidth = Math.max(1, Math.round(rect.width));
+			stageHeight = Math.max(1, Math.round(rect.height));
+		});
+		stageSizeObserver.observe(stageEl);
+		const initialStageRect = stageEl.getBoundingClientRect();
+		stageWidth = Math.max(1, Math.round(initialStageRect.width));
+		stageHeight = Math.max(1, Math.round(initialStageRect.height));
 		instance.setParams($state.snapshot(params));
 
 		// Audio is created after the field so its metering clock can hand
@@ -300,6 +369,7 @@
 			window.clearInterval(recordTimer);
 			window.removeEventListener('keydown', onKeyDown);
 			document.removeEventListener('visibilitychange', onVisibilityChange);
+			stageSizeObserver.disconnect();
 			scopeSource.field = null;
 			audioSource.engine = null;
 			audioEngine?.dispose();
@@ -308,14 +378,35 @@
 			field = null;
 			if (thumbUrl) URL.revokeObjectURL(thumbUrl);
 			if (exportUrl) URL.revokeObjectURL(exportUrl);
+			if (stillUrl) URL.revokeObjectURL(stillUrl);
 		};
 	});
 
-	// Delivery preview uses the same framebuffer as recording, including grain.
+	// Still capture follows the single Export -> Frame choice. The canvas remains
+	// the authoritative live clock; recording temporarily overrides its backing
+	// size and restores this selected frame afterwards.
 	$effect(() => {
-		const format = activeFormat;
-		if (format) field?.setExportSize(format.width, format.height);
-		else field?.clearExportSize();
+		const format = stillFormat;
+		try {
+			if (format) {
+				if (recordFormat) field?.setExportSize(recordFormat.width, recordFormat.height);
+				else {
+					field?.clearExportSize();
+					if (frame === 'stage') field?.clearPreviewSize();
+					else field?.setPreviewSize(format.width, format.height);
+				}
+				// Keep the complete source visible by default. Zoom/crop is explicit.
+				field?.setFraming('fit');
+				if (originalImage) field?.setDeliveryImage(originalImage);
+				stillReady = !!field?.isReady && !!analysis && !!originalImage;
+			} else {
+				field?.clearPreviewSize();
+				stillReady = false;
+			}
+		} catch (error) {
+			stillReady = false;
+			stillError = error instanceof Error ? error.message : 'Could not prepare the still frame.';
+		}
 	});
 
 	// The UI writes a plain snapshot on a control change. The animation loop
@@ -325,12 +416,16 @@
 		if (field) field.setParams(snapshot);
 	});
 
+	$effect(() => {
+		field?.setImageTransform(imageZoom, imagePanX, imagePanY);
+	});
+
 	// Same idea for audio: the reactive controls are copied into the engine's
 	// plain routing object, which its metering clock reads per frame.
 	$effect(() => {
 		const audio = params.audio;
 		const routing = {
-			amount: audio.reactive ? audio.amount : 0,
+			amount: audio.amount,
 			bass: audio.bass,
 			mid: audio.mid,
 			treble: audio.treble
@@ -357,22 +452,45 @@
 		}
 
 		loading = true;
+		stillError = '';
 		try {
 			// Let the browser paint the loading state before the synchronous
 			// analysis + importance sampling pass.
 			await new Promise((resolve) => setTimeout(resolve, 30));
 
 			const nextImage = await decodeImageFile(file, 1200);
+			let nextOriginal: DecodedImage | null = null;
+			try {
+				nextOriginal = await decodeImageFileOriginal(file);
+			} catch (error) {
+				stillError = error instanceof Error
+					? `Still detail is unavailable: ${error.message}`
+					: 'Still detail could not be prepared from the original upload.';
+			}
 			await new Promise((resolve) => setTimeout(resolve, 0));
 			const nextAnalysis = analyzeImage(nextImage);
 
 			if (thumbUrl) URL.revokeObjectURL(thumbUrl);
+			if (stillUrl) URL.revokeObjectURL(stillUrl);
 			thumbUrl = URL.createObjectURL(file);
 			fileName = file.name;
+			sourceFile = file;
+			originalImage = nextOriginal;
 			analysis = nextAnalysis;
+			imageZoom = 1;
+			imagePanX = 0;
+			imagePanY = 0;
+			stillResult = null;
+			stillUrl = '';
 
 			field.setParams($state.snapshot(params));
-			field.setSource(nextAnalysis, nextImage);
+			await field.setSource(nextAnalysis, nextImage);
+			try {
+				field.setDeliveryImage(nextOriginal);
+			} catch (error) {
+				stillError = error instanceof Error ? error.message : 'The original detail surface is not supported on this GPU.';
+			}
+			stillReady = field.isReady && !!nextOriginal;
 		} catch (error) {
 			errorMessage = error instanceof Error ? error.message : 'Could not read that image.';
 		} finally {
@@ -536,9 +654,82 @@
 		field.resample();
 	}
 
+	function centerImage() {
+		imagePanX = 0;
+		imagePanY = 0;
+	}
+
 	function chooseFrame(next: FrameChoice) {
 		if (exportBusy) return;
 		frame = next;
+	}
+
+	function releaseStill() {
+		if (stillUrl) URL.revokeObjectURL(stillUrl);
+		stillUrl = '';
+		stillResult = null;
+	}
+
+	function pixelsCanvas(pixels: Uint8Array, width: number, height: number): HTMLCanvasElement {
+		const output = document.createElement('canvas');
+		output.width = width;
+		output.height = height;
+		const context = output.getContext('2d', { alpha: false });
+		if (!context) throw new Error('The browser could not create a still canvas.');
+		const image = context.createImageData(width, height);
+		for (let y = 0; y < height; y++) {
+			const from = (height - y - 1) * width * 4;
+			image.data.set(pixels.subarray(from, from + width * 4), y * width * 4);
+		}
+		context.putImageData(image, 0, 0);
+		return output;
+	}
+
+	async function saveStill() {
+		if (stillCaptureBusy || loading || audioLoading) return;
+		const format = stillFormat;
+		const instance = field;
+		if (!format) {
+			stillError = 'Choose a valid frame size.';
+			return;
+		}
+		if (!instance || !analysis || !originalImage || !instance.isReady) {
+			stillError = 'Still capture is preparing the image. Try again when Ready is shown.';
+			return;
+		}
+		stillCaptureBusy = true;
+		stillError = '';
+		try {
+			const captured = instance.captureCompletedFrame(format.width, format.height);
+			const canvas = pixelsCanvas(captured.pixels, captured.width, captured.height);
+			const frameId = `f${captured.frameId}-${Date.now()}-${++stillFrameCounter}`;
+			const result = await encodeStill({
+				canvas,
+				format,
+				mime: stillMimeChoice,
+				frameId
+			});
+			releaseStill();
+			const extension = result.extension;
+			const name = `distort-frame-${frameId}-${result.width}x${result.height}.${extension}`;
+			stillUrl = URL.createObjectURL(result.blob);
+			stillResult = {
+				url: stillUrl,
+				name,
+				size: result.blob.size,
+				width: result.width,
+				height: result.height,
+				frameId
+			};
+			const anchor = document.createElement('a');
+			anchor.href = stillUrl;
+			anchor.download = name;
+			anchor.click();
+		} catch (error) {
+			stillError = error instanceof Error ? error.message : 'The still frame could not be saved.';
+		} finally {
+			stillCaptureBusy = false;
+		}
 	}
 
 	function releaseExport() {
@@ -565,7 +756,7 @@
 		}
 
 		const format =
-			activeFormat ?? stageFormat(canvasEl.clientWidth, canvasEl.clientHeight);
+			activeFormat ?? stageFormat(stageWidth, stageHeight);
 
 		const engine = audioEngine;
 		// Join the take where the sound already is instead of restarting it.
@@ -592,7 +783,26 @@
 		await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 		if (!mounted || generation !== recordGeneration) return;
 
-		instance.setExportSize(format.width, format.height);
+		const readyDeadline = performance.now() + 10_000;
+		while (!instance.isReady && performance.now() < readyDeadline) {
+			await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+			if (!mounted || generation !== recordGeneration) return;
+		}
+		if (!instance.isReady) {
+			recordStarting = false;
+			recordFormat = null;
+			exportError = 'The visual engine is still preparing the image. Try recording again in a moment.';
+			return;
+		}
+
+		try {
+			instance.setExportSize(format.width, format.height);
+		} catch (error) {
+			recordStarting = false;
+			recordFormat = null;
+			exportError = error instanceof Error ? error.message : 'The delivery frame could not be created.';
+			return;
+		}
 
 		let created: FrameRecorder;
 		try {
@@ -830,7 +1040,7 @@
 		</div>
 		<div class="mast-stats">
 			<span>{stats ? `${stats.fps.toFixed(0)} fps` : '— fps'}</span>
-			<span>{stats ? `${fmtCount(stats.count)} dots` : '— dots'}</span>
+			<span>{enginePanels.includes('particles') ? (stats ? `${fmtCount(stats.count)} dots` : '— dots') : activeEngine.label}</span>
 			<span>{clock} local</span>
 			<div class="look" role="group" aria-label="Look">
 				<button
@@ -857,17 +1067,35 @@
 		<aside class="panel" aria-label="Controls">
 			<div class="panel-head">
 				<div class="panel-eyebrow"><span>( 01 — Instrument )</span><span>WebGL / 2D</span></div>
-				<h1 class="panel-title">An image,<br />in dust.</h1>
-				<p class="panel-lede">
-					The full photograph stays visible beneath <strong>{fmtCount(params.particleCount)}</strong>
-					points. Sound refracts the image; move the pointer to pull its grain apart.
-				</p>
+				<h1 class="panel-title">An image,<br />in motion.</h1>
+				<p class="panel-lede">{activeEngine.description}</p>
+				{#if enginePanels.includes('particles')}
 				<div class="panel-spec">
 					<span><b>{stats ? fmtCount(stats.count) : fmtCount(params.particleCount)}</b> points</span>
 					<span><b>{stats?.textureSize ?? '—'}</b>² grid</span>
 					<span><b>{stats?.precision ?? 'GPU'}</b> buffer</span>
 				</div>
+				{/if}
 			</div>
+
+			<Section title="Visual engine" kicker="00" open={true}>
+				<div class="chips" role="group" aria-label="Visual engine">
+					{#each ENGINES as engine (engine.id)}
+						<button type="button" class:active={params.visualEngine === engine.id}
+							aria-pressed={params.visualEngine === engine.id}
+							disabled={exportBusy}
+							onclick={() => (params.visualEngine = engine.id)}>
+							{engine.label}
+						</button>
+					{/each}
+				</div>
+				{#each activeEngine.controls.sliders as control (`${activeEngine.id}/${control.key}`)}
+					<Slider label={control.label}
+						bind:value={() => engineValue(control.key), (value) => setEngineValue(control.key, value)}
+						min={control.min} max={control.max} step={control.step} hint={control.hint} format={fmt2} />
+				{/each}
+				<button class="ghost" type="button" onclick={() => field?.reset()} disabled={!analysis}>Reset engine</button>
+			</Section>
 
 			<Section title="Source" kicker="01" open={true}>
 				<button class="upload" onclick={() => fileEl.click()} type="button">
@@ -886,6 +1114,36 @@
 						</div>
 					</div>
 
+					<div class="block-label"><span>Image framing</span><span>original / locked ratio</span></div>
+					<Slider
+						label="Zoom"
+						bind:value={imageZoom}
+						min={1}
+						max={4}
+						step={0.01}
+						format={(value) => `${value.toFixed(2)}×`}
+						hint="Starts at the complete source view. Increase zoom manually to fill or crop the frame."
+					/>
+					<Slider
+						label="Position X"
+						bind:value={imagePanX}
+						min={-1}
+						max={1}
+						step={0.01}
+						format={fmtSigned}
+						hint="Adjust the image horizontally after zooming. Positive values show the right side of the source."
+					/>
+					<Slider
+						label="Position Y"
+						bind:value={imagePanY}
+						min={-1}
+						max={1}
+						step={0.01}
+						format={fmtSigned}
+						hint="Adjust the image vertically after zooming. Positive values show the lower side of the source."
+					/>
+					<button class="ghost" type="button" onclick={centerImage}>Center image</button>
+
 					{#if analysis.palette.length > 0}
 						<div class="palette" aria-label="Dominant hue clusters">
 							{#each analysis.palette as swatch}
@@ -900,6 +1158,7 @@
 						<div class="palette-caption">Dominant hue clusters</div>
 					{/if}
 
+					{#if enginePanels.includes('source-grade')}
 					<Slider
 						label="Edge detail"
 						bind:value={params.edgeBoost}
@@ -961,14 +1220,15 @@
 							</p>
 						{/if}
 					</div>
+					{/if}
 				{:else}
 					<p class="empty-copy">
-						Drop a photograph into the stage. Its pixels stay whole while a second, fine-grained
-						particle field is sampled from it.
+						Drop a photograph into the stage to begin.
 					</p>
 				{/if}
 			</Section>
 
+			{#if enginePanels.includes('optics')}
 			<Section title="Image / optics" kicker="02" open={true}>
 				<Toggle
 					label="Continuous image"
@@ -1067,6 +1327,8 @@
 				{/if}
 			</Section>
 
+			{/if}
+
 			<Section title="Audio" kicker="04" open={true}>
 				<button class="upload" onclick={() => audioEl.click()} type="button">
 					<span>{audioLoaded ? 'Replace audio' : 'Choose audio'}</span>
@@ -1157,7 +1419,7 @@
 				<Toggle
 					label="Audio reactive"
 					bind:checked={params.audio.reactive}
-					hint="When off, the image stays still."
+					hint="When off, sound stops driving the engine. Existing motion follows its own dynamics."
 				/>
 				<Slider
 					label="Motion"
@@ -1297,6 +1559,54 @@
 					</p>
 				{/if}
 
+				<div class="export-spec">
+					<span><b>{stillFormat ? `${stillFormat.width} × ${stillFormat.height}` : '—'}</b></span>
+					<span>exact pixels</span>
+					<span>{stillMimeChoice === 'image/png' ? 'PNG · lossless' : 'JPEG · quality 94'}</span>
+				</div>
+				<p class="grade-hint">Aspect ratio is locked. The original source view is preserved until you adjust Zoom and Position.</p>
+				<div class="chips export-chips still-chips" role="group" aria-label="Still file format">
+					<button type="button" class:active={stillMimeChoice === 'image/png'}
+						aria-pressed={stillMimeChoice === 'image/png'} disabled={stillCaptureBusy}
+						onclick={() => (stillMimeChoice = 'image/png')}>PNG</button>
+					<button type="button" class:active={stillMimeChoice === 'image/jpeg'}
+						aria-pressed={stillMimeChoice === 'image/jpeg'} disabled={stillCaptureBusy}
+						onclick={() => (stillMimeChoice = 'image/jpeg')}>JPEG</button>
+				</div>
+				<p class="grade-hint">
+					{stillDetailWarning || 'The original upload is retained for the delivery surface.'}
+					{stillFormat ? ` ${stillFormat.width} × ${stillFormat.height} matches the selected Frame.` : ''}
+				</p>
+				{#if stillError}
+					<p class="export-error" role="alert">{stillError}</p>
+				{/if}
+				<p class="grade-hint">
+					{stillReady
+						? 'Ready · Save frame captures the last fully presented frame.'
+						: originalImage
+							? 'Preparing the delivery surface…'
+							: 'Load an image to prepare the original-backed still surface.'}
+				</p>
+				<button class="save-frame" type="button" disabled={stillCaptureBusy || loading || audioLoading || !stillFormat || !originalImage}
+					onclick={saveStill}>
+					<span>{stillCaptureBusy ? 'Encoding…' : stillReady ? 'Save frame' : 'Prepare still'}</span>
+					<span aria-hidden="true">↓</span>
+				</button>
+				{#if stillResult}
+					<div class="export-out">
+						<div class="audio-meta">
+							<span class="filename" title={stillResult.name}>{stillResult.name}</span>
+							<span class="dims">{formatBytes(stillResult.size)}</span>
+						</div>
+						<p class="grade-hint">
+							{stillResult.width} × {stillResult.height} · frame {stillResult.frameId}
+						</p>
+						<a class="download" href={stillResult.url} download={stillResult.name}>
+							<span>Download still</span><span aria-hidden="true">↓</span>
+						</a>
+					</div>
+				{/if}
+
 				<div class="block-label"><span>Take</span><span>{deliverSeconds.toFixed(0)} s</span></div>
 				<div class="chips export-chips" role="group" aria-label="Take length">
 					<button
@@ -1399,6 +1709,7 @@
 				</p>
 			</Section>
 
+			{#if enginePanels.includes('particles')}
 			<Section title="Presets" kicker="06" open={true}>
 				<div class="presets">
 					{#each PRESETS as preset, index}
@@ -1660,6 +1971,7 @@
 					format={fmt2}
 				/>
 			</Section>
+			{/if}
 
 			<Section title="Modulation" kicker="15" open={false}>
 				<div class="lfo-head">
@@ -1692,6 +2004,12 @@
 									<option value="photoFolds">Folds</option>
 									<option value="photoBlocks">Blocks</option>
 									<option value="photoChroma">Chromatic split</option>
+								</optgroup>
+								<optgroup label="Active mode">
+									<option value="modeIntensity">Mode intensity</option>
+									<option value="modeDetail">Mode detail</option>
+									<option value="modeDepth">Mode depth</option>
+									<option value="modeMotion">Mode motion</option>
 								</optgroup>
 							</select>
 							<select
@@ -1761,8 +2079,8 @@
 
 				<p class="lfo-hint">
 					Each route multiplies one parameter by <code>1 + signal × depth</code>. Retrigger restarts
-					the phase and swells the route back in; phases survive preset changes. Image / optics
-					routes modulate while audio is present. A control at 0 stays off.
+					the phase and swells the route back in; phases survive preset changes. Active mode routes
+					apply to every visual engine. A control at 0 stays off.
 				</p>
 			</Section>
 
@@ -1799,7 +2117,7 @@
 			</div>
 
 			<div class="stage-line stage-line-bottom">
-				<span>{analysis ? 'Move pointer to distort' : 'Input — JPG / PNG / WebP'}</span>
+						<span>{analysis ? 'Adjust crop controls to frame the source' : 'Input — JPG / PNG / WebP'}</span>
 				<span>
 					{activeFormat
 						? `${activeFormat.width}×${activeFormat.height} · ${activeFormat.fps} fps`
@@ -2001,9 +2319,6 @@
 		text-align: justify;
 		text-align-last: left;
 		color: var(--ink-soft);
-	}
-	.panel-lede strong {
-		font-weight: 500;
 	}
 	.panel-spec {
 		display: grid;
@@ -2250,6 +2565,9 @@
 	.chips.frame-chips {
 		grid-template-columns: repeat(4, minmax(0, 1fr));
 	}
+	.chips.still-chips {
+		grid-template-columns: repeat(4, minmax(0, 1fr));
+	}
 	.custom-size {
 		display: flex;
 		align-items: center;
@@ -2341,6 +2659,29 @@
 		height: 7px;
 		border-radius: 50%;
 		background: #bb4a2f;
+	}
+	.save-frame {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		width: 100%;
+		margin: 8px 0;
+		padding: 10px 11px;
+		border: 1px solid var(--ink);
+		background: var(--paper);
+		color: var(--ink);
+		font-family: var(--mono);
+		font-size: 9px;
+		letter-spacing: 0.03em;
+		text-transform: uppercase;
+	}
+	.save-frame:hover:not(:disabled) {
+		background: var(--ink);
+		color: var(--paper);
+	}
+	.save-frame:disabled {
+		cursor: wait;
+		opacity: 0.55;
 	}
 	.record.recording .record-dot {
 		background: var(--ink);

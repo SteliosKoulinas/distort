@@ -13,6 +13,7 @@
  */
 
 export type ExportFormatId = 'reel' | 'post' | 'square' | 'portrait' | 'wide' | 'custom';
+export type StillFormatId = 'story' | 'square' | 'landscape' | 'custom';
 
 /** The framebuffer is derived from the stage itself; the others are fixed. */
 export type FrameChoice = 'stage' | ExportFormatId;
@@ -31,11 +32,62 @@ export interface ExportFormat {
 	bitrate: number;
 }
 
+export interface StillFormat {
+	id: StillFormatId;
+	label: string;
+	note: string;
+	width: number;
+	height: number;
+	aspect: string;
+}
+
+export interface StillDimensionError {
+	field: 'width' | 'height' | 'pixels';
+	message: string;
+}
+
 const FPS = 30;
 
 /** H.264 encoders reject odd dimensions in 4:2:0, so the UI never offers them. */
 export const MIN_EXPORT_EDGE = 240;
 export const MAX_EXPORT_EDGE = 2160;
+
+/** Still images are not constrained by H.264's even 4:2:0 requirement. */
+export const MIN_STILL_EDGE = 1;
+export const MAX_STILL_EDGE = 8192;
+export const MAX_STILL_PIXELS = 16_777_216;
+
+export const STILL_FORMATS: StillFormat[] = [
+	{ id: 'story', label: 'Story', note: '9:16 · 1080 × 1920', width: 1080, height: 1920, aspect: '9 / 16' },
+	{ id: 'square', label: 'Square', note: '1:1 · 1080 × 1080', width: 1080, height: 1080, aspect: '1 / 1' },
+	{ id: 'landscape', label: 'Landscape', note: '16:9 · 1920 × 1080', width: 1920, height: 1080, aspect: '16 / 9' }
+];
+
+export function validateStillDimensions(width: number, height: number): StillDimensionError | null {
+	if (!Number.isInteger(width) || width < MIN_STILL_EDGE || width > MAX_STILL_EDGE) {
+		return { field: 'width', message: `Width must be a whole pixel value from ${MIN_STILL_EDGE} to ${MAX_STILL_EDGE}.` };
+	}
+	if (!Number.isInteger(height) || height < MIN_STILL_EDGE || height > MAX_STILL_EDGE) {
+		return { field: 'height', message: `Height must be a whole pixel value from ${MIN_STILL_EDGE} to ${MAX_STILL_EDGE}.` };
+	}
+	if (width * height > MAX_STILL_PIXELS) {
+		return { field: 'pixels', message: `This target is too large (${MAX_STILL_PIXELS.toLocaleString()} pixels maximum).` };
+	}
+	return null;
+}
+
+export function customStillFormat(width: number, height: number): StillFormat {
+	const error = validateStillDimensions(width, height);
+	if (error) throw new Error(error.message);
+	return {
+		id: 'custom',
+		label: 'Custom',
+		note: `${width} × ${height}`,
+		width,
+		height,
+		aspect: `${width} / ${height}`
+	};
+}
 
 /** ~0.28 bits per pixel per frame: generous for dots on black. */
 function bitrateFor(width: number, height: number): number {
@@ -144,6 +196,21 @@ export function stageFormat(cssWidth: number, cssHeight: number): ExportFormat {
 		fps: FPS,
 		bitrate: bitrateFor(w, h)
 	};
+}
+
+export function stageStillFormat(cssWidth: number, cssHeight: number): StillFormat {
+	const width = Math.max(1, Number.isFinite(cssWidth) ? cssWidth : 1);
+	const height = Math.max(1, Number.isFinite(cssHeight) ? cssHeight : 1);
+	const scale = 1080 / Math.max(width, height);
+	const w = Math.max(1, Math.round(width * scale));
+	const h = Math.max(1, Math.round(height * scale));
+	const error = validateStillDimensions(w, h);
+	if (error) {
+		// A CSS stage should never exceed this bound, but preserve a useful
+		// fallback for a not-yet-laid-out canvas.
+		return customStillFormat(1080, 1080);
+	}
+	return { id: 'custom', label: 'Stage', note: `${w} × ${h}`, width: w, height: h, aspect: `${w} / ${h}` };
 }
 
 export function formatMbps(bitrate: number): string {

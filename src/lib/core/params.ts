@@ -7,6 +7,7 @@
  */
 
 import type { PaletteMode } from './palette';
+import type { VisualEngineId } from '#lib/visual/types';
 
 export type LfoTarget =
 	| 'curl'
@@ -24,7 +25,11 @@ export type LfoTarget =
 	| 'photoRefraction'
 	| 'photoFolds'
 	| 'photoBlocks'
-	| 'photoChroma';
+	| 'photoChroma'
+	| 'modeIntensity'
+	| 'modeDetail'
+	| 'modeDepth'
+	| 'modeMotion';
 
 export type LfoShape = 'sine' | 'triangle' | 'ramp' | 'random';
 
@@ -48,7 +53,11 @@ export function neutralModulation(): Modulation {
 		photoRefraction: 1,
 		photoFolds: 1,
 		photoBlocks: 1,
-		photoChroma: 1
+		photoChroma: 1,
+		modeIntensity: 1,
+		modeDetail: 1,
+		modeDepth: 1,
+		modeMotion: 1
 	};
 }
 
@@ -112,6 +121,27 @@ export interface PhotoSettings {
 	chroma: number;
 }
 
+export interface StructuralSettings {
+	intensity: number;
+	sensitivity: number;
+	recovery: number;
+	scale: number;
+}
+
+export interface SignalSettings {
+	intensity: number;
+	rows: number;
+	channel: number;
+	recovery: number;
+}
+
+export interface FragmentedSettings {
+	intensity: number;
+	planes: number;
+	depth: number;
+	drift: number;
+}
+
 /**
  * Audio settings. `motion` is the master gate: it decides how far the image
  * opens while a track plays. With no audio the field stays close to the
@@ -130,6 +160,8 @@ export interface AudioSettings {
 }
 
 export interface SimParams {
+	/** Active visual language. The default preserves the particle engine. */
+	visualEngine: VisualEngineId;
 	particleCount: number;
 	pointSize: number;
 	opacity: number;
@@ -176,6 +208,28 @@ export interface SimParams {
 	/** Full-resolution image-space treatment, rendered before the point field. */
 	photo: PhotoSettings;
 
+	temporal: {
+		memory: number;
+		decay: number;
+		drift: number;
+	};
+
+	structural: {
+		intensity: number;
+		sensitivity: number;
+		recovery: number;
+		scale: number;
+	};
+
+	surface: {
+		intensity: number;
+		viscosity: number;
+		scale: number;
+		folding: number;
+	};
+	signal: SignalSettings;
+	fragmented: FragmentedSettings;
+
 	/** Four user LFOs. Phases live in ParticleField, not in this snapshot. */
 	lfos: LfoSettings[];
 
@@ -198,6 +252,7 @@ export interface Preset {
 }
 
 const drift: SimParams = {
+	visualEngine: 'particles',
 	particleCount: 200_000,
 	pointSize: 1.2,
 	opacity: 0.68,
@@ -257,6 +312,35 @@ const drift: SimParams = {
 		blocks: 0.28,
 		chroma: 0.3
 	},
+	temporal: {
+		memory: 0.7,
+		decay: 0.4,
+		drift: 0.7
+	},
+	structural: {
+		intensity: 0.72,
+		sensitivity: 0.82,
+		recovery: 0.58,
+		scale: 0.42
+	},
+	surface: {
+		intensity: 0.72,
+		viscosity: 0.55,
+		scale: 0.4,
+		folding: 0.35
+	},
+	signal: {
+		intensity: 0.72,
+		rows: 0.42,
+		channel: 0.28,
+		recovery: 0.62
+	},
+	fragmented: {
+		intensity: 0.68,
+		planes: 0.42,
+		depth: 0.38,
+		drift: 0.3
+	},
 
 	lfos: [
 		{ enabled: true, target: 'curl', shape: 'sine', rate: 0.07, depth: 0.35 },
@@ -284,6 +368,11 @@ export function createDefaultParams(): SimParams {
 		palette: { ...drift.palette },
 		form: { ...drift.form },
 		photo: { ...drift.photo },
+		temporal: { ...drift.temporal },
+		structural: { ...drift.structural },
+		surface: { ...drift.surface },
+		signal: { ...drift.signal },
+		fragmented: { ...drift.fragmented },
 		lfos: drift.lfos.map((lfo) => ({ ...lfo })),
 		audio: { ...drift.audio }
 	};
@@ -395,6 +484,11 @@ export function applyPreset(base: SimParams, preset: Preset): SimParams {
 		palette: { ...base.palette },
 		form: { ...(preset.params.form ?? defaults.form) },
 		photo: { ...base.photo },
+		temporal: { ...base.temporal },
+		structural: { ...base.structural },
+		surface: { ...base.surface },
+		signal: { ...base.signal },
+		fragmented: { ...base.fragmented },
 		lfos: base.lfos.map((lfo) => ({ ...lfo })),
 		audio: { ...base.audio }
 	};

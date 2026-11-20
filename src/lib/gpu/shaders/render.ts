@@ -4,6 +4,7 @@ precision highp float;
 uniform sampler2D uPosition;
 uniform sampler2D uNormals;
 uniform vec2  uFit;
+uniform vec3  uImageTransform;
 uniform float uPointSize;
 uniform float uPixelRatio;
 uniform float uOpacity;
@@ -43,9 +44,13 @@ void main() {
   vec4 sim = texture2D(uPosition, aRef);
   vec3 p = sim.xyz;
 
-  // Positions live in image space [-1,1]. uFit letterboxes them into the
-  // stage without touching the simulation coordinates.
-  vec2 xy = p.xy * uFit;
+  // Positions live in image space [-1,1]. uFit frames them into the stage
+  // without touching the simulation coordinates.
+  // Match the continuous image's crop/zoom transform so dots remain attached
+  // to the same source pixels as the photograph below them.
+  float imageZoom = uImageTransform.x;
+  vec2 imageOffset = uImageTransform.yz;
+  vec2 xy = (p.xy - imageOffset * 2.0) * imageZoom * uFit;
 
   // ---- Image-anchored optics -------------------------------------------
   // Every offset below is read from the photograph itself and expressed in
@@ -62,7 +67,7 @@ void main() {
   //    put, contours slide along their own normal. This is the whole trick —
   //    the image is not rearranged, it is viewed through a moving surface.
   vec2 bend = nrm * uLens * (0.45 + detail * 1.4) * 0.09;
-  xy += bend * uFit;
+  xy += bend * imageZoom * uFit;
 
   // 2. Raster. The image is cut into its own cells; each cell drifts as a
   //    pane and opens from its centre. Cell identity comes from the source
@@ -78,7 +83,7 @@ void main() {
     );
     vec2 offset = (jitter * 0.55 + drift * 0.45) * uRaster * 0.045;
     vec2 open = (uv - centre) * uRaster * 0.14;
-    xy += (offset + open) * 2.0 * uFit;
+    xy += (offset + open) * 2.0 * imageZoom * uFit;
   }
 
   // 3. Slice. Horizontal bands of the source slide sideways and stop. The
@@ -88,7 +93,7 @@ void main() {
     float bands = 22.0;
     float band = floor(uv.y * bands);
     float dir = hash11(band * 3.17 + 5.0) * 2.0 - 1.0;
-    xy.x += dir * uSlice * 0.085 * uFit.x;
+    xy.x += dir * uSlice * 0.085 * imageZoom * uFit.x;
   }
 
   // 4. Relief. The bright structure lifts toward the viewer; the shadows stay

@@ -8,7 +8,11 @@ import {
 	estimateBytes,
 	findFormat,
 	normalizeEdge,
-	stageFormat
+	stageFormat,
+	STILL_FORMATS,
+	MAX_STILL_PIXELS,
+	customStillFormat,
+	validateStillDimensions
 } from '../src/lib/export/formats.ts';
 
 test('every preset is a legal H.264 frame with a real bitrate', () => {
@@ -79,4 +83,25 @@ test('estimates grow with size and duration but never divide by zero', () => {
 	assert.ok(estimateBytes(reel, 60) > estimateBytes(square, 60));
 	assert.ok(estimateBytes(square, 120) > estimateBytes(square, 60));
 	assert.ok(estimateBytes(square, 0) > 0);
+});
+
+test('still presets and custom dimensions preserve odd pixels', () => {
+	assert.deepEqual(
+		STILL_FORMATS.map((format) => [format.id, format.width, format.height]),
+		[
+			['story', 1080, 1920],
+			['square', 1080, 1080],
+			['landscape', 1920, 1080]
+		]
+	);
+	const odd = customStillFormat(2501, 1603);
+	assert.deepEqual([odd.width, odd.height], [2501, 1603]);
+	assert.equal(validateStillDimensions(2501, 1603), null);
+});
+
+test('still dimensions reject invalid and oversized targets instead of rounding', () => {
+	assert.equal(validateStillDimensions(0, 100).field, 'width');
+	assert.equal(validateStillDimensions(100.5, 100).field, 'width');
+	assert.equal(validateStillDimensions(100, MAX_STILL_PIXELS + 1).field, 'height');
+	assert.throws(() => customStillFormat(2501, 7000), /too large/);
 });

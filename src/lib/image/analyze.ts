@@ -15,6 +15,9 @@ export interface ImageAnalysis {
 	lum: Float32Array;
 	/** Normalized Sobel gradient magnitude, 0..1. */
 	edge: Float32Array;
+	/** Signed Sobel derivatives in image coordinates (positive Y points down). */
+	sobelX: Float32Array;
+	sobelY: Float32Array;
 	/** HSV saturation, 0..1. */
 	sat: Float32Array;
 	/** HSV hue, 0..1. */
@@ -49,6 +52,8 @@ export function analyzeImage(image: DecodedImage): ImageAnalysis {
 	const sat = new Float32Array(n);
 	const hue = new Float32Array(n);
 	const edge = new Float32Array(n);
+	const sobelX = new Float32Array(n);
+	const sobelY = new Float32Array(n);
 	const histogram = new Uint32Array(256);
 
 	let meanLum = 0;
@@ -108,6 +113,8 @@ export function analyzeImage(image: DecodedImage): ImageAnalysis {
 
 			const gx = -tl + tr - 2 * ml + 2 * mr - bl + br;
 			const gy = -tl - 2 * tc - tr + bl + 2 * bc + br;
+			sobelX[i] = gx;
+			sobelY[i] = gy;
 			edge[i] = Math.min(1, Math.sqrt(gx * gx + gy * gy) * 0.5);
 		}
 	}
@@ -124,6 +131,8 @@ export function analyzeImage(image: DecodedImage): ImageAnalysis {
 		aspect: width / height,
 		lum,
 		edge,
+		sobelX,
+		sobelY,
 		sat,
 		hue,
 		palette: extractPalette(px, hue, sat, lum, n),
