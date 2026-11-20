@@ -25,7 +25,11 @@ export type LfoTarget =
 	| 'photoRefraction'
 	| 'photoFolds'
 	| 'photoBlocks'
-	| 'photoChroma';
+	| 'photoChroma'
+	| 'modeIntensity'
+	| 'modeDetail'
+	| 'modeDepth'
+	| 'modeMotion';
 
 export type LfoShape = 'sine' | 'triangle' | 'ramp' | 'random';
 
@@ -49,7 +53,11 @@ export function neutralModulation(): Modulation {
 		photoRefraction: 1,
 		photoFolds: 1,
 		photoBlocks: 1,
-		photoChroma: 1
+		photoChroma: 1,
+		modeIntensity: 1,
+		modeDetail: 1,
+		modeDepth: 1,
+		modeMotion: 1
 	};
 }
 

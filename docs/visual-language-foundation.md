@@ -36,9 +36,12 @@ stuck.
 - A dedicated, fitted source-photo quad renders the current frame. It does not
   depend on Original's photo mesh, visibility or particle controls.
 - `FeedbackBuffer` owns bounded read/write targets with reset, resize and disposal.
+- Delivery-size changes copy compatible residue into the new targets rather than
+  silently resetting the live trail; explicit reset and source replacement
+  still clear it.
 - Feedback uses source-byte colour space consistently; no unintended sRGB decode
   darkens the history. A convex mix prevents brightness accumulation.
-- Image replacement, resizing, manual reset and mode re-entry clear history.
+- Image replacement, manual reset and mode re-entry clear history.
 - P0 silence converges to the source. The later artistic target—freezing the last
   exposure—is intentionally still pending.
 
@@ -57,6 +60,22 @@ Motion and Reactive are applied once by the host before engine update. Engines
 receive the same gated contract and never read analyser bytes. Original's manual
 Pulse remains a separate gesture, not an audio bypass. Existing simulation
 inertia can continue after sound is gated off.
+
+### Still-frame delivery
+
+The Export panel has an independent still target with Story, square, landscape
+and validated custom dimensions. Odd positive pixel sizes are retained; video
+formats keep their separate H.264 constraints. The selected still aspect and
+fit/fill framing are previewed before capture, and PNG/JPEG encoding happens in
+`src/lib/export/still.ts`.
+
+The original upload `File` and full-resolution decode are retained alongside the
+1200px interactive proxy. A delivery render target swaps in the original-backed
+photo texture without stepping the simulation. `ParticleField` increments a
+completed-frame ID only after presentation; Save frame copies that frame to an
+independent target, reads it once, and encodes asynchronously with one pending
+capture. Temporal delivery uses a copy pass, never a second feedback-producing
+render. Temporary targets and superseded download URLs are released.
 
 Spectral flux now compares normalized current and previous bins. Its regression
 test covers increases between two nonzero spectra, not only silence-to-sound.

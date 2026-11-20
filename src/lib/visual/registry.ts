@@ -32,7 +32,13 @@ function define<P>(
 		id, label, description, group, controls,
 		create() {
 			const engine = construct();
-			return { engine, setParams: (params) => engine.setParams(select(params)) };
+			return {
+				engine,
+				setParams: (params) => {
+					engine.setParams(select(params));
+					engine.setLfos?.(params.lfos);
+				}
+			};
 		}
 	};
 }

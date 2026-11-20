@@ -61,3 +61,8 @@ export async function decodeImageFile(file: File, maxDimension = 1200): Promise<
 		aspect: width / height
 	};
 }
+
+/** Decode without the interactive preview downscale for delivery preparation. */
+export function decodeImageFileOriginal(file: File): Promise<DecodedImage> {
+	return decodeImageFile(file, Number.POSITIVE_INFINITY);
+}

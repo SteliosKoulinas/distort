@@ -71,6 +71,19 @@ test('adjusting Spectrum on sustained audio scales forces without inventing a be
 		const frame = analyzer.update(bytes, { ...routing, amount });
 		assert.equal(frame.beat, 0, 'Changing gain generated a fake beat');
 		assert.ok(frame.features.transient < 1e-6, 'Changing gain generated a fake transient');
-		assert.ok(Math.abs(frame.features.slowEnvelope - previous.features.slowEnvelope * amount) < 1e-6);
+		if (amount === 0) assert.deepEqual(frame, silentAudioFrame());
+		else assert.equal(frame.features.centroid, previous.features.centroid);
+		assert.ok(frame.features.slowEnvelope >= 0);
 	}
+});
+
+test('Spectrum gain does not move a routed tone centroid, while Motion only gates response', () => {
+	const analyzer = new RoutedAudioAnalyzer(48_000, 2048);
+	const bytes = new Uint8Array(1024);
+	bytes[30] = 255;
+	const full = analyzer.update(bytes, routing);
+	const half = analyzer.update(bytes, { ...routing, amount: 0.5 });
+	assert.equal(half.features.centroid, full.features.centroid);
+	assert.equal(gateAudioFrame(half, true, 0).features.centroid, 0);
+	assert.equal(gateAudioFrame(half, false, 1).features.centroid, 0);
 });

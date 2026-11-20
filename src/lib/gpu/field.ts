@@ -35,6 +35,7 @@ export class ParticleField {
 	private frameCount = 0;
 	private statsTime = 0;
 	private frameHook: ((canvas: HTMLCanvasElement) => void) | null = null;
+	private completedFrameId = 0;
 
 	constructor(options: ParticleFieldOptions) {
 		this.canvas = options.canvas;
@@ -63,11 +64,12 @@ export class ParticleField {
 		}).catch((error) => this.fail(error));
 	}
 
-	async setSource(analysis: ImageAnalysis, image: DecodedImage): Promise<void> {
-		await this.view.setSource({ analysis, image });
+	async setSource(analysis: ImageAnalysis, image: DecodedImage, deliveryImage?: DecodedImage): Promise<void> {
+		await this.view.setSource({ analysis, image, deliveryImage });
 		this.hasSource = true;
 		this.start();
 	}
+	setDeliveryImage(image: DecodedImage | null): void { this.view.setDeliveryImage(image); }
 
 	setAudio(frame: AudioFrame): void {
 		this.audio = { ...frame, features: { ...frame.features } };
@@ -83,6 +85,12 @@ export class ParticleField {
 	resample(params?: SimParams): void { if (params) this.setParams(params); this.view.resample(); }
 	setExportSize(width: number, height: number): void { this.view.setExportSize(width, height); }
 	clearExportSize(): void { this.view.clearExportSize(); }
+	setPreviewSize(width: number, height: number): void { this.view.setPreviewSize(width, height); }
+	clearPreviewSize(): void { this.view.clearPreviewSize(); }
+	setFraming(mode: 'fit' | 'fill'): void { this.view.setFraming(mode); }
+	setImageTransform(zoom: number, panX: number, panY: number): void {
+		this.view.setImageTransform(zoom, panX, panY);
+	}
 	setFrameHook(hook: ((canvas: HTMLCanvasElement) => void) | null): void { this.frameHook = hook; }
 
 	start(): void {
@@ -102,6 +110,7 @@ export class ParticleField {
 		try {
 			this.view.update(dt, audio);
 			if (this.hasSource && this.view.render()) {
+				this.completedFrameId++;
 				this.frameHook?.(this.canvas);
 			}
 		} catch (error) { this.fail(error); return; }
@@ -114,6 +123,11 @@ export class ParticleField {
 			this.frameCount = 0;
 		}
 	};
+
+	get lastPresentedFrameId(): number { return this.completedFrameId; }
+	captureCompletedFrame(width: number, height: number) {
+		return { frameId: this.completedFrameId, ...this.view.captureCompletedFrame(width, height) };
+	}
 
 	private fail(error: unknown): void {
 		if (this.disposed) return;
@@ -129,8 +143,10 @@ export class ParticleField {
 		const rect = this.canvas.getBoundingClientRect();
 		if (rect.width <= 0 || rect.height <= 0) return;
 		Object.assign(this.view.context.pointer, {
-			x: (((event.clientX - rect.left) / rect.width) * 2 - 1) / this.view.fit.x,
-			y: (1 - ((event.clientY - rect.top) / rect.height) * 2) / this.view.fit.y,
+			x: ((((event.clientX - rect.left) / rect.width) * 2 - 1) /
+				(this.view.fit.x * this.view.imageTransform.x)) + this.view.imageTransform.y * 2,
+			y: ((1 - ((event.clientY - rect.top) / rect.height) * 2) /
+				(this.view.fit.y * this.view.imageTransform.x)) + this.view.imageTransform.z * 2,
 			active: true
 		});
 	};

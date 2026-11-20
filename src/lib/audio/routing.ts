@@ -45,6 +45,12 @@ export class RoutedAudioAnalyzer {
 			this.reset();
 			return silentAudioFrame();
 		}
+		if (amount === 0) {
+			// Keep analyser and beat history coherent, but expose a genuinely
+			// silent routed frame. Do not feed zeroes into the history: the
+			// next nonzero gain must not look like a new onset.
+			return silentAudioFrame();
+		}
 		for (let i = 0; i < bytes.length; i++) {
 			const hz = i * this.sampleRate / this.fftSize;
 			const enabled = hz >= 20 && hz < 12_000 &&
@@ -52,10 +58,18 @@ export class RoutedAudioAnalyzer {
 			this.routed[i] = enabled ? bytes[i] : 0;
 		}
 		const raw = this.extractor.update(this.routed, dt);
-		const features = { ...raw };
-		for (const key of Object.keys(features) as (keyof typeof features)[]) {
-			features[key] = clamp(features[key] * amount);
-		}
+		// `centroid` is a position, not an amount. Gain changes the response
+		// strength while the same tone must keep the same frequency coordinate.
+		const features = {
+			...raw,
+			rms: clamp(raw.rms * amount),
+			low: clamp(raw.low * amount),
+			mid: clamp(raw.mid * amount),
+			high: clamp(raw.high * amount),
+			flux: clamp(raw.flux * amount),
+			slowEnvelope: clamp(raw.slowEnvelope * amount),
+			transient: clamp(raw.transient * amount)
+		};
 		this.beatAverage += (raw.low - this.beatAverage) * (1 - Math.exp(-dt * 3.71));
 		const delta = raw.low - this.beatAverage;
 		return {
@@ -75,8 +89,15 @@ export function gateAudioFrame(frame: AudioFrame, reactive: boolean, motion: num
 	for (const key of ['bass', 'mid', 'treble', 'amp', 'beat'] as const) {
 		result[key] = clamp(frame[key]) * gate;
 	}
-	for (const key of Object.keys(result.features) as (keyof typeof result.features)[]) {
-		result.features[key] = clamp(frame.features[key]) * gate;
-	}
+	result.features.rms = clamp(frame.features.rms) * gate;
+	result.features.low = clamp(frame.features.low) * gate;
+	result.features.mid = clamp(frame.features.mid) * gate;
+	result.features.high = clamp(frame.features.high) * gate;
+	result.features.flux = clamp(frame.features.flux) * gate;
+	result.features.slowEnvelope = clamp(frame.features.slowEnvelope) * gate;
+	result.features.transient = clamp(frame.features.transient) * gate;
+	// Preserve frequency position. Effects use response terms for visibility,
+	// so a gated frame cannot rotate an otherwise inactive effect.
+	result.features.centroid = gate > 0 ? clamp(frame.features.centroid) : 0;
 	return result;
 }

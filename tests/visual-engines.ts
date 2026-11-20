@@ -11,6 +11,7 @@ import type { VisualRenderContext } from '../src/lib/visual/types';
 import { renderTarget } from '../src/lib/visual/resources';
 import { StructureBuilder } from '../src/lib/image/structure-client';
 import { buildStructureField, packStructureField } from '../src/lib/image/structure';
+import { structureCacheStats } from '../src/lib/image/structure-cache';
 
 function assert(ok: boolean, message: string): asserts ok {
 	if (!ok) throw new Error(message);
@@ -90,6 +91,21 @@ export async function runVisualEngineTests() {
 			assert(await cancelled, 'Disposed worker did not cancel pending analysis');
 			pass('structure: disposal cancels pending work');
 		} finally { builder.dispose(); }
+		const cacheBefore = structureCacheStats().completed;
+		const cachedStructural = ENGINES.find((entry) => entry.id === 'structural-erosion')!.create();
+		cachedStructural.engine.init(context);
+		cachedStructural.setParams(params);
+		await cachedStructural.engine.setImage(source);
+		cachedStructural.engine.dispose();
+		const afterFirstStructural = structureCacheStats().completed;
+		const cachedStructuralAgain = ENGINES.find((entry) => entry.id === 'structural-erosion')!.create();
+		cachedStructuralAgain.engine.init(context);
+		cachedStructuralAgain.setParams(params);
+		await cachedStructuralAgain.engine.setImage(source);
+		cachedStructuralAgain.engine.dispose();
+		assert(afterFirstStructural >= cacheBefore && structureCacheStats().completed === afterFirstStructural,
+			'Structural re-entry started a second analysis for the same source');
+		pass('structure: cached analysis reused on mode re-entry');
 		for (const definition of ENGINES) {
 			const take = async (audio: AudioFrame, frames = 20) => {
 				const binding = definition.create(), engine = binding.engine;

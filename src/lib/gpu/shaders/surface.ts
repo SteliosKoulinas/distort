@@ -2,10 +2,11 @@
 export const surfaceVertexShader = /* glsl */ `
 precision highp float;
 uniform vec2 uFit;
+uniform vec3 uImageTransform;
 varying vec2 vUv;
 void main() {
-  vUv = uv;
-  gl_Position = vec4(position.xy * uFit, 0.0, 1.0);
+  vUv = uv + uImageTransform.yz;
+  gl_Position = vec4(position.xy * uFit * uImageTransform.x, 0.0, 1.0);
 }
 `;
 

@@ -36,6 +36,7 @@ export class ParticleEngine implements VisualEngine<ParticleParams> {
 	private photoMaterial!: THREE.ShaderMaterial;
 	private photoMesh!: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
 	private photo: THREE.DataTexture | null = null;
+	private deliveryPhoto: THREE.DataTexture | null = null;
 	private normal: THREE.DataTexture | null = null;
 	private time = 0;
 	private beat = 0;
@@ -54,6 +55,7 @@ export class ParticleEngine implements VisualEngine<ParticleParams> {
 		this.material = new THREE.ShaderMaterial({
 			uniforms: {
 				uPosition: { value: null }, uNormals: { value: null }, uFit: { value: context.fit },
+				uImageTransform: { value: context.imageTransform },
 				uPointSize: { value: 1.2 }, uPixelRatio: { value: context.pixelRatio },
 				uOpacity: { value: 0.68 }, uTime: { value: 0 },
 				uPaletteDark: { value: new THREE.Vector3() }, uPaletteLight: { value: new THREE.Vector3() },
@@ -68,6 +70,7 @@ export class ParticleEngine implements VisualEngine<ParticleParams> {
 		this.photoMaterial = new THREE.ShaderMaterial({
 			uniforms: {
 				uImage: { value: null }, uNormals: { value: null }, uFit: { value: context.fit },
+				uImageTransform: { value: context.imageTransform },
 				uTime: { value: 0 }, uStrength: { value: 0 }, uRefraction: { value: 0 },
 				uFolds: { value: 0 }, uBlocks: { value: 0 }, uChroma: { value: 0 },
 				uBass: { value: 0 }, uTreble: { value: 0 }, uBeat: { value: 0 },
@@ -95,6 +98,7 @@ export class ParticleEngine implements VisualEngine<ParticleParams> {
 		this.photo?.dispose();
 		this.normal = nextNormal;
 		this.photo = nextPhoto;
+		this.setDeliveryImage(source.deliveryImage ?? null);
 		this.source = source;
 		this.photoMaterial.uniforms.uImage.value = nextPhoto;
 		this.photoMaterial.uniforms.uImageSize.value.set(source.image.width, source.image.height);
@@ -102,6 +106,10 @@ export class ParticleEngine implements VisualEngine<ParticleParams> {
 		this.material.uniforms.uNormals.value = nextNormal;
 		this.reset();
 		this.applyPalette();
+	}
+	setDeliveryImage(image: import('#lib/image/decode').DecodedImage | null): void {
+		this.deliveryPhoto?.dispose();
+		this.deliveryPhoto = image ? photoTexture(image) : null;
 	}
 
 	reset(): void {
@@ -196,6 +204,9 @@ export class ParticleEngine implements VisualEngine<ParticleParams> {
 		mod.scale = Math.min(2.5, Math.max(0.35, mod.scale));
 		mod.size = Math.min(2.2, Math.max(0.3, mod.size));
 		mod.opacity = Math.min(1.5, Math.max(0.25, mod.opacity));
+		for (const key of ['modeIntensity', 'modeDetail', 'modeDepth', 'modeMotion'] as const) {
+			mod[key] = Math.min(2.5, Math.max(0.25, mod[key]));
+		}
 		if (!this.sim) return;
 
 		// Only the shared gated frame can drive audio forces. Manual gestures are separate.
@@ -221,10 +232,14 @@ export class ParticleEngine implements VisualEngine<ParticleParams> {
 		const photoParticles = showPhoto ? modulatePhotoValue(photo.particles, mod.photoParticles, response) : 1;
 		const u = this.photoMaterial.uniforms;
 		u.uTime.value = this.time;
-		u.uStrength.value = modulatePhotoValue(photo.amount, mod.photoBreak, response) * response;
-		u.uRefraction.value = modulatePhotoValue(photo.refraction, mod.photoRefraction, response);
-		u.uFolds.value = modulatePhotoValue(photo.folds, mod.photoFolds, response);
-		u.uBlocks.value = modulatePhotoValue(photo.blocks, mod.photoBlocks, response);
+		u.uStrength.value = modulatePhotoValue(photo.amount, mod.photoBreak, response)
+			* mod.modeIntensity * response;
+		u.uRefraction.value = modulatePhotoValue(photo.refraction, mod.photoRefraction, response)
+			* mod.modeDetail;
+		u.uFolds.value = modulatePhotoValue(photo.folds, mod.photoFolds, response)
+			* mod.modeMotion;
+		u.uBlocks.value = modulatePhotoValue(photo.blocks, mod.photoBlocks, response)
+			* mod.modeDepth;
 		u.uChroma.value = modulatePhotoValue(photo.chroma, mod.photoChroma, response);
 		u.uBass.value = audio.bass;
 		u.uTreble.value = audio.treble;
@@ -252,11 +267,29 @@ export class ParticleEngine implements VisualEngine<ParticleParams> {
 			renderer.render(this.scene, camera);
 		} finally { renderer.setRenderTarget(previous); }
 	}
+	renderDelivery(target: THREE.WebGLRenderTarget): void {
+		const image = this.photoMaterial.uniforms.uImage.value;
+		const size = this.photoMaterial.uniforms.uImageSize.value.clone();
+		if (this.deliveryPhoto) {
+			this.photoMaterial.uniforms.uImage.value = this.deliveryPhoto;
+			if (this.source?.deliveryImage) {
+				this.photoMaterial.uniforms.uImageSize.value.set(
+					this.source.deliveryImage.width, this.source.deliveryImage.height
+				);
+			}
+		}
+		try { this.render(target); }
+		finally {
+			this.photoMaterial.uniforms.uImage.value = image;
+			this.photoMaterial.uniforms.uImageSize.value = size;
+		}
+	}
 	resize(_width: number, _height: number): void {}
 	dispose(): void {
 		this.sim?.dispose();
 		this.points?.geometry.dispose();
 		this.photo?.dispose();
+		this.deliveryPhoto?.dispose();
 		this.normal?.dispose();
 		this.photoMesh.geometry.dispose();
 		this.photoMaterial.dispose();

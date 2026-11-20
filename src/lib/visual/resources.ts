@@ -47,6 +47,50 @@ export class FeedbackBuffer {
 		this.reset();
 	}
 
+	resizePreserving(
+		width: number,
+		height: number,
+		renderer: THREE.WebGLRenderer,
+		camera: THREE.Camera,
+		copy: THREE.ShaderMaterial,
+		scene: THREE.Scene,
+		mesh: THREE.Mesh
+	): void {
+		if (this.read.width === width && this.read.height === height) return;
+		if (this.dirty) {
+			this.read.setSize(width, height);
+			this.write.setSize(width, height);
+			return;
+		}
+		const oldRead = this.read;
+		const oldWrite = this.write;
+		const nextRead = renderTarget(width, height);
+		const nextWrite = renderTarget(width, height);
+		const previousTarget = renderer.getRenderTarget();
+		const previousMaterial = mesh.material;
+		try {
+			mesh.material = copy;
+			copy.uniforms.uTexture.value = oldRead.texture;
+			renderer.setRenderTarget(nextRead);
+			renderer.render(scene, camera);
+			copy.uniforms.uTexture.value = oldWrite.texture;
+			renderer.setRenderTarget(nextWrite);
+			renderer.render(scene, camera);
+			this.read = nextRead;
+			this.write = nextWrite;
+			this.dirty = false;
+		} catch (error) {
+			nextRead.dispose();
+			nextWrite.dispose();
+			throw error;
+		} finally {
+			mesh.material = previousMaterial;
+			renderer.setRenderTarget(previousTarget);
+		}
+		oldRead.dispose();
+		oldWrite.dispose();
+	}
+
 	reset(): void { this.dirty = true; }
 
 	clear(renderer: THREE.WebGLRenderer): void {

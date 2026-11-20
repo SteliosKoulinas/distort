@@ -1,5 +1,6 @@
 import type * as THREE from 'three';
 import type { AudioFrame } from '#lib/audio/types';
+import type { SimParams } from '#lib/core/params';
 import type { ImageAnalysis } from '#lib/image/analyze';
 import type { DecodedImage } from '#lib/image/decode';
 import type { PointerState } from '#lib/gpu/simulation';
@@ -10,6 +11,8 @@ export type VisualEngineId = 'particles' | 'structural-erosion' | 'surface-morph
 
 export interface VisualImage {
 	image: DecodedImage;
+	/** Full-detail source prepared for a still target; preview remains separate. */
+	deliveryImage?: DecodedImage;
 	analysis: ImageAnalysis;
 }
 
@@ -39,6 +42,8 @@ export interface VisualRenderContext {
 	renderer: THREE.WebGLRenderer;
 	camera: THREE.Camera;
 	fit: THREE.Vector2;
+	/** x = extra image zoom, y/z = source-space crop offset. */
+	imageTransform: THREE.Vector3;
 	width: number;
 	height: number;
 	pixelRatio: number;
@@ -53,9 +58,14 @@ export interface VisualEngine<Params = never> {
 	readonly stats: EngineStats;
 	init(context: VisualRenderContext): void;
 	setImage(image: VisualImage): void | Promise<void>;
+	setDeliveryImage?(image: DecodedImage | null): void;
 	setParams(params: Params): void;
+	/** Continuous engines use the same four LFO routes as Original. */
+	setLfos?(lfos: SimParams['lfos']): void;
 	update(dt: number, audio: AudioFrame): void;
 	render(target: THREE.WebGLRenderTarget | null): void;
+	/** Render the already-computed frame to a delivery target without stepping state. */
+	renderDelivery?(target: THREE.WebGLRenderTarget): void;
 	resize(width: number, height: number): void;
 	reset(): void;
 	/** Rebuild sampling while retaining performance controls such as LFO phase. */

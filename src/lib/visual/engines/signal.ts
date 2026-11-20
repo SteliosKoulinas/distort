@@ -16,7 +16,7 @@ export const signalControls: ControlSchema = {
 export class SignalEngine extends ImageEngine<SimParams['signal']> {
 	readonly id = 'signal-dislocation';
 	readonly controls = signalControls;
-	readonly silenceBehaviour = 'Clean source (prototype behaviour; final silence choice remains open).';
+	readonly silenceBehaviour = 'A low-level scan drift remains visible; transients open stronger row slips and RGB separation.';
 
 	init(context: VisualRenderContext): void {
 		this.setup(context, signalVertexShader, signalFragmentShader, {
@@ -27,9 +27,10 @@ export class SignalEngine extends ImageEngine<SimParams['signal']> {
 
 	update(dt: number, audio: AudioFrame): void {
 		this.time += dt;
-		const p = this.params, f = audio.features;
-		this.uniforms({ uTime: this.time, uIntensity: p.intensity, uRows: p.rows,
-			uChannel: p.channel, uRecovery: p.recovery, uHigh: f.high,
+		const p = this.params, f = audio.features, m = this.advanceModulation(dt);
+		this.uniforms({ uTime: this.time, uIntensity: p.intensity * m.modeIntensity,
+			uRows: p.rows * m.modeDepth, uChannel: p.channel * m.modeDetail,
+			uRecovery: Math.min(1, p.recovery * m.modeMotion), uHigh: f.high,
 			uFlux: f.flux, uTransient: f.transient, uCentroid: f.centroid });
 	}
 }

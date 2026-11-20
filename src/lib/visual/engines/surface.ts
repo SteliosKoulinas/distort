@@ -27,9 +27,10 @@ export class SurfaceEngine extends ImageEngine<SimParams['surface']> {
 
 	update(dt: number, audio: AudioFrame): void {
 		this.time += dt;
-		const p = this.params, f = audio.features;
-		this.uniforms({ uTime: this.time, uIntensity: p.intensity * Math.min(1, f.rms * 8),
-			uViscosity: p.viscosity, uScale: p.scale, uFolding: p.folding,
+		const p = this.params, f = audio.features, m = this.advanceModulation(dt);
+		this.uniforms({ uTime: this.time, uIntensity: p.intensity * m.modeIntensity * Math.min(1, f.rms * 8),
+			uViscosity: p.viscosity * m.modeDetail, uScale: p.scale * m.modeDepth,
+			uFolding: p.folding * m.modeMotion,
 			uLow: f.low, uMid: f.mid, uHigh: f.high, uFlux: f.flux,
 			uTransient: f.transient, uCentroid: f.centroid });
 	}

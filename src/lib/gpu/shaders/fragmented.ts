@@ -2,10 +2,11 @@
 export const fragmentedVertexShader = /* glsl */ `
 precision highp float;
 uniform vec2 uFit;
+uniform vec3 uImageTransform;
 varying vec2 vUv;
 void main() {
-  vUv = uv;
-  gl_Position = vec4(position.xy * uFit, 0.0, 1.0);
+  vUv = uv + uImageTransform.yz;
+  gl_Position = vec4(position.xy * uFit * uImageTransform.x, 0.0, 1.0);
 }
 `;
 
@@ -42,7 +43,8 @@ void main() {
   vec3 base = source(uv);
   float levels = 3.0 + uPlanes * 5.0;
   float material = sourceLuma(base);
-  float activity = clamp(uIntensity * (0.35 + uLow * 0.55 + uMid * 0.25 + uTransient * 0.45), 0.0, 1.0);
+  float breath = 0.5 + 0.5 * sin(uTime * 0.28 + material * 8.0);
+  float activity = clamp(uIntensity * (0.24 + breath * 0.1 + uLow * 0.65 + uMid * 0.38 + uTransient * 0.6), 0.0, 1.0);
   vec2 axis = normalize(vec2(0.35 + uCentroid, 1.0));
   vec3 colour = vec3(0.0);
   float total = 0.0;
@@ -53,18 +55,25 @@ void main() {
   for (int i = 0; i < 8; i++) {
     float index = float(i);
     float centre = (index + 0.5) / levels;
-    float weight = 1.0 - smoothstep(0.10, 0.34, abs(material - centre));
+    float weight = 1.0 - smoothstep(0.07, 0.28, abs(material - centre));
     float phase = hash(vec2(index, 4.7)) * 6.2831;
-    vec2 planeOffset = axis * sin(uTime * (0.035 + uLow * 0.05) + phase) * uDrift * 0.012;
-    planeOffset += axis * (centre - 0.5) * uDepth * activity * 0.045;
-    planeOffset += vec2(-axis.y, axis.x) * uTransient * sin(phase + uTime * 0.4) * 0.008;
+    float planeSpeed = 0.16 + index * 0.035 + uLow * 0.14;
+    vec2 planeOffset = axis * sin(uTime * planeSpeed + phase) * uDrift * (0.022 + activity * 0.018);
+    planeOffset += axis * (centre - 0.5) * uDepth * (0.035 + activity * 0.075);
+    planeOffset += vec2(-axis.y, axis.x)
+      * sin(phase + uTime * (0.32 + uMid * 0.5)) * uDrift * (0.008 + uTransient * 0.022);
     colour += source(uv + planeOffset) * weight;
     total += weight;
   }
 
   colour /= max(total, 0.001);
   float boundary = smoothstep(0.04, 0.3, abs(fract(material * levels) - 0.5));
-  colour = mix(base, colour, clamp(activity * (0.32 + boundary * 0.82), 0.0, 1.0));
+  float separation = clamp(activity * (0.44 + boundary * 0.9), 0.0, 1.0);
+  colour = mix(base, colour, separation);
+  // A narrow dark seam makes adjacent planes readable without turning the
+  // image into arbitrary rectangles or a permanent black mask.
+  float seam = 1.0 - smoothstep(0.08, 0.22, abs(fract(material * levels) - 0.5));
+  colour *= 1.0 - seam * activity * 0.16;
   gl_FragColor = vec4(colour, uOpacity);
 }
 `;

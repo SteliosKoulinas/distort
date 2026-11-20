@@ -2,10 +2,11 @@
 export const signalVertexShader = /* glsl */ `
 precision highp float;
 uniform vec2 uFit;
+uniform vec3 uImageTransform;
 varying vec2 vUv;
 void main() {
-  vUv = uv;
-  gl_Position = vec4(position.xy * uFit, 0.0, 1.0);
+  vUv = uv + uImageTransform.yz;
+  gl_Position = vec4(position.xy * uFit * uImageTransform.x, 0.0, 1.0);
 }
 `;
 
@@ -39,19 +40,22 @@ vec3 source(vec2 uv) {
 
 void main() {
   vec2 uv = vUv;
-  float event = clamp(uIntensity * (uFlux * 0.72 + uTransient * 0.86 + uHigh * 0.16), 0.0, 1.0);
-  float rowIndex = floor(uv.y * (8.0 + uRows * 152.0));
-  float rowPhase = hash(rowIndex + floor(uTime * 1.5));
-  float rowEvent = smoothstep(0.62, 0.96, rowPhase) * event;
-  float slowLine = sin(uv.y * (32.0 + uRows * 120.0) + uTime * 0.7) * 0.5 + 0.5;
-  float selective = rowEvent * smoothstep(0.28, 0.85, slowLine);
+  float spectral = clamp(uFlux * 0.72 + uTransient * 0.86 + uHigh * 0.16, 0.0, 1.5);
+  float event = clamp(uIntensity * (0.16 + spectral * 0.9), 0.0, 1.0);
+  float rowIndex = floor(uv.y * (10.0 + uRows * 170.0));
+  float rowPhase = hash(rowIndex + 17.3);
+  float rowPulse = 0.5 + 0.5 * sin(uTime * (1.2 + uRows * 2.8) + rowPhase * 6.2831 + rowIndex * 0.07);
+  float rowEvent = smoothstep(0.34, 0.9, rowPulse) * event;
+  float slowLine = sin(uv.y * (32.0 + uRows * 120.0) + uTime * (0.9 + uRows * 1.8)) * 0.5 + 0.5;
+  float selective = rowEvent * smoothstep(0.22, 0.82, slowLine);
 
   // Rows shift as signal events, while the source image remains the material.
-  float signedShift = (hash(rowIndex + 8.3) * 2.0 - 1.0) * selective;
-  vec2 displacement = vec2(signedShift * (0.008 + uCentroid * 0.018), 0.0);
-  vec2 redUv = uv + displacement * (1.0 + uChannel * 0.8);
+  float slip = sin(uTime * (1.8 + uCentroid * 2.2) + rowIndex * 1.71 + rowPhase * 4.0);
+  float signedShift = (slip * 0.7 + (hash(rowIndex + 8.3) * 2.0 - 1.0) * 0.3) * selective;
+  vec2 displacement = vec2(signedShift * (0.018 + uCentroid * 0.028), 0.0);
+  vec2 redUv = uv + displacement * (1.0 + uChannel * 1.6);
   vec2 greenUv = uv + displacement * 0.35;
-  vec2 blueUv = uv - displacement * (1.0 + uChannel);
+  vec2 blueUv = uv - displacement * (1.0 + uChannel * 1.8);
   vec3 dislocated = vec3(source(redUv).r, source(greenUv).g, source(blueUv).b);
 
   // A small edge test makes corruption prefer meaningful image boundaries.
@@ -60,13 +64,14 @@ void main() {
   float neighbour = dot(source(uv + vec2(0.004, 0.0)), vec3(0.2126, 0.7152, 0.0722));
   float edge = smoothstep(0.018, 0.22, abs(luma - neighbour));
   float material = clamp(0.2 + edge * 1.2, 0.0, 1.0);
-  float disruption = selective * material * (1.0 - uRecovery * 0.45);
+  float disruption = selective * material * (1.0 - uRecovery * 0.35);
   vec3 colour = mix(here, dislocated, disruption);
 
   // Sparse scanline lift is intentionally restrained and disappears between
   // events instead of becoming a permanent glitch overlay.
-  float line = smoothstep(0.78, 0.98, fract(uv.y * (24.0 + uRows * 100.0)));
-  colour = mix(colour, colour.bgr, line * selective * 0.08);
+  float line = smoothstep(0.78, 0.98, fract(uv.y * (24.0 + uRows * 100.0) + uTime * 0.12));
+  colour = mix(colour, colour.bgr, line * (0.12 + selective * 0.16));
+  colour *= 1.0 + (slowLine - 0.5) * event * 0.12;
   gl_FragColor = vec4(colour, uOpacity);
 }
 `;

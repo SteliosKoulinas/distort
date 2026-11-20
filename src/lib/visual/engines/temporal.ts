@@ -56,11 +56,11 @@ export class TemporalEngine extends ImageEngine<SimParams['temporal']> {
 
 	update(dt: number, audio: AudioFrame): void {
 		this.time += dt;
-		const p = this.params, f = audio.features, u = this.feedback.uniforms;
+		const p = this.params, f = audio.features, m = this.advanceModulation(dt), u = this.feedback.uniforms;
 		u.uTime.value = this.time;
-		u.uMemory.value = p.memory * Math.min(1, f.rms * 8);
-		u.uDecay.value = p.decay;
-		u.uDrift.value = p.drift;
+		u.uMemory.value = p.memory * m.modeIntensity * Math.min(1, f.rms * 8);
+		u.uDecay.value = Math.min(1, p.decay * m.modeDetail);
+		u.uDrift.value = p.drift * m.modeMotion;
 		u.uLow.value = f.low;
 		u.uFlux.value = f.flux;
 		u.uTransient.value = f.transient;
@@ -70,8 +70,18 @@ export class TemporalEngine extends ImageEngine<SimParams['temporal']> {
 		const { renderer, camera } = this.context;
 		const previous = renderer.getRenderTarget();
 		try {
-			if (this.history.dirty) this.history.clear(renderer);
 			super.render(this.source);
+			if (this.history.dirty) {
+				// Seed both feedback sides from a real framed source. Clearing
+				// would make the first loud frame blend against the clear colour.
+				this.copy.uniforms.uTexture.value = this.source.texture;
+				this.passMesh.material = this.copy;
+				for (const buffer of [this.history.read, this.history.write]) {
+					renderer.setRenderTarget(buffer);
+					renderer.render(this.passScene, camera);
+				}
+				this.history.dirty = false;
+			}
 			this.feedback.uniforms.uCurrent.value = this.source.texture;
 			this.feedback.uniforms.uHistory.value = this.history.read.texture;
 			this.passMesh.material = this.feedback;
@@ -87,9 +97,26 @@ export class TemporalEngine extends ImageEngine<SimParams['temporal']> {
 		}
 	}
 
+	/** Copy the last completed residue without advancing feedback history. */
+	renderDelivery(target: THREE.WebGLRenderTarget): void {
+		const { renderer, camera } = this.context;
+		const previous = renderer.getRenderTarget();
+		try {
+			this.copy.uniforms.uTexture.value = this.history.read.texture;
+			this.passMesh.material = this.copy;
+			renderer.setRenderTarget(target);
+			renderer.render(this.passScene, camera);
+		} finally {
+			renderer.setRenderTarget(previous);
+		}
+	}
+
 	resize(width: number, height: number): void {
 		this.source.setSize(width, height);
-		this.history.resize(width, height);
+		this.history.resizePreserving(
+			width, height, this.context.renderer, this.context.camera,
+			this.copy, this.passScene, this.passMesh
+		);
 	}
 
 	reset(): void { super.reset(); this.history?.reset(); }
